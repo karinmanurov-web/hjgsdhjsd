@@ -2145,7 +2145,127 @@ const AnalyzerLite = (() => {
   }
   return { compute, horizonV, guessObjectSize };
 })();
-
+/* ============================================================
+   FFT — для spectral residual (Hou & Zhang, 2007)
+   ============================================================ */
+const FFT = (() => {
+  // Radix-2 iterative FFT. real/imag — Float32Array длины N (N = 2^k).
+  function fft1d(real, imag, inverse=false){
+    const n = real.length;
+    // bit-reversal
+    for(let i=1, j=0; i<n; i++){
+      let bit = n >> 1;
+      for(; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if(i < j){
+        [real[i], real[j]] = [real[j], real[i]];
+        [imag[i], imag[j]] = [imag[j], imag[i]];
+      }
+    }
+    // butterflies
+    for(let len = 2; len <= n; len <<= 1){
+      const ang = (inverse ? 2 : -2) * Math.PI / len;
+      const wr = Math.cos(ang), wi = Math.sin(ang);
+      for(let i=0; i<n; i+=len){
+        let cr = 1, ci = 0;
+        for(let k=0; k<len/2; k++){
+          const ur = real[i+k],          ui = imag[i+k];
+          const vr = real[i+k+len/2]*cr - imag[i+k+len/2]*ci;
+          const vi = real[i+k+len/2]*ci + imag[i+k+len/2]*cr;
+          real[i+k]          = ur + vr;
+          imag[i+k]          = ui + vi;
+          real[i+k+len/2]    = ur - vr;
+          imag[i+k+len/2]    = ui - vi;
+          const ncr = cr*wr - ci*wi;
+          ci = cr*wi + ci*wr;
+          cr = ncr;
+        }
+      }
+    }
+    if(inverse){
+      for(let i=0;i<n;i++){ real[i] /= n; imag[i] /= n; }
+    }
+  }
+  // 2D FFT по строкам и столбцам. W и H должны быть степенями двойки.
+  function fft2d(real, imag, W, H, inverse=false){
+    const rowR = new Float32Array(W), rowI = new Float32Array(W);
+    for(let y=0; y<H; y++){
+      for(let x=0; x<W; x++){ rowR[x] = real[y*W+x]; rowI[x] = imag[y*W+x]; }
+      fft1d(rowR, rowI, inverse);
+      for(let x=0; x<W; x++){ real[y*W+x] = rowR[x]; imag[y*W+x] = rowI[x]; }
+    }
+    const colR = new Float32Array(H), colI = new Float32Array(H);
+    for(let x=0; x<W; x++){
+      for(let y=0; y<H; y++){ colR[y] = real[y*W+x]; colI[y] = imag[y*W+x]; }
+      fft1d(colR, colI, inverse);
+      for(let y=0; y<H; y++){ real[y*W+x] = colR[y]; imag[y*W+x] = colI[y]; }
+    }
+  }
+  // Быстрое размытие через box-blur (для log-амплитуды и saliency достаточно).
+  function boxBlur(src, W, H, radius){
+    const tmp = new Float32Array(src.length);
+    const out = new Float32Array(src.length);
+    // горизонтальный проход
+    for(let y=0; y<H; y++){
+      let sum = 0, count = 0;
+      for(let x=-radius; x<=radius; x++){
+        const xx = Math.max(0, Math.min(W-1, x));
+        sum += src[y*W + xx]; count++;
+      }
+      for(let x=0; x<W; x++){
+        tmp[y*W + x] = sum / count;
+        const xOut = Math.max(0, Math.min(W-1, x - radius));
+        const xIn  = Math.max(0, Math.min(W-1, x + radius + 1));
+        sum += src[y*W + xIn] - src[y*W + xOut];
+      }
+    }
+    // вертикальный проход
+    for(let x=0; x<W; x++){
+      let sum = 0, count = 0;
+      for(let y=-radius; y<=radius; y++){
+        const yy = Math.max(0, Math.min(H-1, y));
+        sum += tmp[yy*W + x]; count++;
+      }
+      for(let y=0; y<H; y++){
+        out[y*W + x] = sum / count;
+        const yOut = Math.max(0, Math.min(H-1, y - radius));
+        const yIn  = Math.max(0, Math.min(H-1, y + radius + 1));
+        sum += tmp[yIn*W + x] - tmp[yOut*W + x];
+      }
+    }
+    return out;
+  }
+  // Spectral residual: серое изображение → карта saliency.
+  // gray — Float32Array длины W*H со значениями 0..1.
+  function spectralResidual(gray, W, H){
+    const real = new Float32Array(gray);
+    const imag = new Float32Array(gray.length);
+    fft2d(real, imag, W, H, false);
+    const logAmp = new Float32Array(gray.length);
+    for(let i=0;i<gray.length;i++){
+      logAmp[i] = Math.log(Math.hypot(real[i], imag[i]) + 1e-6);
+    }
+    const smoothed = boxBlur(logAmp, W, H, 3);
+    const residual = new Float32Array(gray.length);
+    for(let i=0;i<gray.length;i++) residual[i] = logAmp[i] - smoothed[i];
+    for(let i=0;i<gray.length;i++){
+      const a = Math.exp(residual[i]);
+      const phase = Math.atan2(imag[i], real[i]);
+      real[i] = a * Math.cos(phase);
+      imag[i] = a * Math.sin(phase);
+    }
+    fft2d(real, imag, W, H, true);
+    const sal = new Float32Array(gray.length);
+    for(let i=0;i<gray.length;i++) sal[i] = real[i]*real[i] + imag[i]*imag[i];
+    const blurred = boxBlur(sal, W, H, 2);
+    // нормализация 0..1
+    let maxV = 0;
+    for(let i=0;i<blurred.length;i++) if(blurred[i] > maxV) maxV = blurred[i];
+    if(maxV > 0) for(let i=0;i<blurred.length;i++) blurred[i] /= maxV;
+    return blurred;
+  }
+  return { fft1d, fft2d, boxBlur, spectralResidual };
+})();
 /* ============================================================
    Evaluator — оценка кадра по разделу 9
    ============================================================ */
