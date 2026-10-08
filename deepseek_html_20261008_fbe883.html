@@ -699,9 +699,31 @@ const State = (() => {
   }
   function load(){
     try{
-      const raw = localStorage.getItem('framelab.project.v5');
-      project = raw ? JSON.parse(raw) : defaultProject();
-    }catch(e){ project = defaultProject(); }
+      const rawV5 = localStorage.getItem('framelab.project.v5');
+      const rawLegacy = localStorage.getItem('framelab.project');
+
+      if(rawV5){
+        project = JSON.parse(rawV5);
+      }else if(rawLegacy){
+        const legacy = JSON.parse(rawLegacy);
+        project = defaultProject();
+        project.name = legacy.name || project.name;
+        project.units = legacy.units || project.units;
+        project.objects = Array.isArray(legacy.objects) ? legacy.objects : [];
+
+        // Stage 2 stored one shared shotCam instead of per-frame cameras.
+        // Preserve that camera when upgrading to the Stage 5 frame model.
+        const legacyShot = legacy.shotCam || defaultShotCam();
+        const first = defaultFrame('Кадр 1', legacyShot);
+        project.frames = [first];
+        project.currentFrameId = first.id;
+      }else{
+        project = defaultProject();
+      }
+    }catch(e){
+      console.error('FrameLab: project migration/load failed', e);
+      project = defaultProject();
+    }
     if(!project.objects) project.objects = [];
     if(!project.frames) project.frames = [];
     if(!project.guides) project.guides = [];
