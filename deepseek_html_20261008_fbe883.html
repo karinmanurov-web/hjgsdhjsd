@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FrameLab — Этап 2</title>
+<title>FrameLab — Этап 1</title>
 <style>
   :root{
     --bg:#1e1e1e; --bg2:#252526; --bg3:#2d2d30; --bd:#3f3f46;
     --fg:#e6e6e6; --fg2:#a0a0a0; --acc:#4a9eff; --acc2:#2b6bb8;
     --ok:#4caf50; --warn:#ff9800; --err:#f44336;
-    --h-menu:28px; --h-ctrl:32px; --h-film:96px;
-    --w-tools:56px; --w-panel:320px;
+    --h-menu:28px; --h-ctrl:32px; --h-tabs:30px; --h-film:96px;
+    --w-tools:56px; --w-panel:300px;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
@@ -20,13 +20,14 @@
   button:hover{background:#3a3a3d}
   button.on{background:var(--acc);border-color:var(--acc);color:#fff}
   button:disabled{opacity:.4;cursor:default}
-  input[type=number],input[type=text],select{width:100%;background:#1a1a1a;color:var(--fg);
+  input[type=number],input[type=text]{width:100%;background:#1a1a1a;color:var(--fg);
     border:1px solid var(--bd);border-radius:3px;padding:2px 4px;font:inherit}
   input[type=range]{width:100%}
   .row{display:flex;gap:6px;align-items:center;margin:4px 0}
-  .row>label{min-width:64px;color:var(--fg2)}
+  .row>label{min-width:44px;color:var(--fg2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:4px}
   .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
-  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+  /* Раскладка */
   #app{display:grid;height:100%;
     grid-template-rows:var(--h-menu) var(--h-ctrl) 1fr var(--h-film);
     grid-template-columns:var(--w-tools) 1fr var(--w-panel);
@@ -52,20 +53,14 @@
   #tools .t:hover{background:#3a3a3d}
   #tools .t.on{background:var(--acc);border-color:var(--acc);color:#fff}
   #viewWrap{grid-area:view;position:relative;background:#111;overflow:hidden}
-  #viewSplit{position:absolute;inset:0;display:none}
-  #viewSplit .pane{position:absolute;top:0;bottom:0;overflow:hidden}
-  #viewSplit .pane.left{left:0;right:50%;border-right:1px solid var(--bd)}
-  #viewSplit .pane.right{left:50%;right:0}
-  #viewSplit .pane .paneLabel{position:absolute;top:6px;left:8px;z-index:3;
-    color:var(--fg2);background:rgba(0,0,0,.5);padding:2px 6px;border-radius:3px;font-size:11px}
-  #viewSplit .pane .paneBody{position:absolute;inset:0}
-  #viewSingle{position:absolute;inset:0}
-  #tabs{position:absolute;top:6px;left:50%;transform:translateX(-50%);z-index:6;
+  #tabs{position:absolute;top:6px;left:50%;transform:translateX(-50%);z-index:5;
     display:flex;gap:2px;background:rgba(0,0,0,.55);border:1px solid var(--bd);
     border-radius:6px;padding:3px}
   #tabs button{border-radius:4px}
+  #view{position:absolute;inset:0}
+  #view canvas{display:block;width:100%;height:100%}
   #hud{position:absolute;left:8px;bottom:8px;color:var(--fg2);font-size:11px;
-    background:rgba(0,0,0,.55);padding:4px 8px;border-radius:4px;pointer-events:none;z-index:7}
+    background:rgba(0,0,0,.5);padding:4px 8px;border-radius:4px;pointer-events:none}
   #panel{grid-area:panel;background:var(--bg2);border-left:1px solid var(--bd);
     overflow-y:auto;padding:8px}
   #film{grid-area:film;background:var(--bg2);border-top:1px solid var(--bd);
@@ -79,7 +74,8 @@
   .panelSection.collapsed>.body{display:none}
   .panelSection>.body{padding:8px}
   .hint{color:var(--fg2);font-size:11px;margin:4px 0}
-  .val{color:var(--acc);font-variant-numeric:tabular-nums}
+  .kbd{display:inline-block;background:#111;border:1px solid var(--bd);border-radius:3px;
+    padding:0 4px;font-family:monospace;font-size:11px}
   body.hidePanels #tools,body.hidePanels #panel,body.hidePanels #film{display:none}
   body.hidePanels #app{grid-template-columns:0 1fr 0;grid-template-rows:
     var(--h-menu) var(--h-ctrl) 1fr 0}
@@ -98,29 +94,12 @@
     justify-content:center;color:var(--fg2);font-size:11px;cursor:pointer}
   .filmItem.on{border-color:var(--acc)}
   .toast{position:absolute;top:44px;left:50%;transform:translateX(-50%);
-    background:rgba(0,0,0,.85);color:#fff;padding:6px 12px;border-radius:4px;
-    font-size:12px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:30}
+    background:rgba(0,0,0,.8);color:#fff;padding:6px 12px;border-radius:4px;
+    font-size:12px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:20}
   .toast.show{opacity:1}
+  .colorRow{display:flex;gap:4px;align-items:center}
   .axisBtn{min-width:26px;text-align:center}
   .axisBtn.on{background:var(--acc);border-color:var(--acc);color:#fff}
-  /* PiP миниатюра камеры кадра */
-  #pip{position:absolute;right:10px;bottom:10px;width:220px;height:124px;
-    background:#000;border:1px solid var(--bd);border-radius:4px;overflow:hidden;
-    z-index:5;display:none;box-shadow:0 4px 16px rgba(0,0,0,.5)}
-  #pip canvas{display:block;width:100%;height:100%}
-  #pip.on{display:block}
-  /* Рамка кадра на виде "Кадр" */
-  #frameWrap{position:absolute;inset:0;pointer-events:none}
-  #frameBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-    border:1px solid rgba(255,255,255,.5);box-shadow:0 0 0 9999px rgba(0,0,0,.5)}
-  #frameBox.inside{box-shadow:0 0 0 9999px rgba(0,0,0,.5)}
-  #frameCanvas{position:absolute;inset:0;width:100%;height:100%;display:block}
-  #viewFrame{position:absolute;inset:0;display:none}
-  #viewFrame canvas.main{position:absolute;inset:0;width:100%;height:100%}
-  .presetBtn{padding:2px 6px;font-size:11px}
-  .kv{display:flex;justify-content:space-between;font-size:11px;color:var(--fg2);margin:2px 0}
-  .kv b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
-  .sensorInfo{color:var(--fg2);font-size:11px}
 </style>
 </head>
 <body>
@@ -140,10 +119,10 @@
   </div>
 
   <div id="ctrl">
-    <span class="hint">Гизмо:</span>
-    <button id="gizmoMove" class="on" title="G">Перемещение</button>
-    <button id="gizmoRot" title="R">Вращение</button>
-    <button id="gizmoScale" title="S">Масштаб</button>
+    <span class="hint">Инструмент:</span>
+    <button id="gizmoMove" class="on" title="Перемещение (G)">Перемещение</button>
+    <button id="gizmoRot" title="Вращение (R)">Вращение</button>
+    <button id="gizmoScale" title="Масштаб (S)">Масштаб</button>
     <span class="sep"></span>
     <span class="hint">Ось:</span>
     <button class="axisBtn" data-axis="x">X</button>
@@ -158,20 +137,13 @@
     <button data-add="circle">Круг</button>
     <button data-add="polygon">Полигон</button>
     <span class="sep"></span>
-    <button id="btnDelete">Удалить</button>
-    <button id="btnDup">Дубль</button>
+    <button id="btnDelete" title="Удалить (Del)">Удалить</button>
+    <button id="btnDup" title="Дублировать (Ctrl+D)">Дубль</button>
     <span class="sep"></span>
-    <button id="btnUndo">↶</button>
-    <button id="btnRedo">↷</button>
+    <button id="btnUndo" title="Ctrl+Z">↶</button>
+    <button id="btnRedo" title="Ctrl+Y">↷</button>
     <span class="sep"></span>
-    <button id="btnFit">Fit</button>
-    <span class="sep"></span>
-    <span class="hint">Вид редактора:</span>
-    <button data-edview="persp" class="on">Персп.</button>
-    <button data-edview="front">Спереди</button>
-    <button data-edview="top">Сверху</button>
-    <button data-edview="left">Слева</button>
-    <button data-edview="right">Справа</button>
+    <button id="btnFit" title="F">Fit</button>
   </div>
 
   <div id="tools">
@@ -181,48 +153,19 @@
     <div class="t" data-add="rect" title="Прямоугольник">▭</div>
     <div class="t" data-add="circle" title="Круг">◯</div>
     <div class="t" data-add="polygon" title="Многоугольник">▲</div>
-    <div class="t" data-tool="orbit" title="Орбита">⟳</div>
-    <div class="t" data-tool="pan" title="Рука">✋</div>
+    <div class="t" data-tool="orbit" title="Орбита (Alt+ЛКМ)">⟳</div>
+    <div class="t" data-tool="pan" title="Рука (ПКМ / Space)">✋</div>
   </div>
 
   <div id="viewWrap">
     <div id="tabs">
-      <button data-tab="scene">Сцена 3D</button>
-      <button data-tab="frame">Кадр</button>
-      <button data-tab="split" class="on">Сплит</button>
-      <button data-tab="board" disabled title="Этап 4">Раскадровка</button>
+      <button class="on" data-tab="scene">Сцена 3D</button>
+      <button data-tab="frame" disabled title="Появится в этапе 2">Кадр</button>
+      <button data-tab="split" disabled title="Появится в этапе 2">Сплит</button>
+      <button data-tab="board" disabled title="Появится в этапе 4">Раскадровка</button>
     </div>
-
-    <!-- Одна область: сюда вешается либо editor-канвас, либо frame-канвас -->
-    <div id="viewSingle"></div>
-
-    <!-- Сплит: два пейна -->
-    <div id="viewSplit">
-      <div class="pane left">
-        <div class="paneLabel">Сцена 3D</div>
-        <div class="paneBody" id="viewSplitLeft"></div>
-      </div>
-      <div class="pane right">
-        <div class="paneLabel">Кадр</div>
-        <div class="paneBody" id="viewSplitRight"></div>
-      </div>
-    </div>
-
-    <!-- Одиночный вид "Кадр" -->
-    <div id="viewFrame">
-      <canvas class="main" id="frameCanvasSingle"></canvas>
-      <div id="frameWrap">
-        <div id="frameBox"></div>
-      </div>
-    </div>
-
-    <!-- PiP миниатюра камеры кадра (показывается в видах "Сцена 3D" и "Сплит") -->
-    <div id="pip"><canvas id="pipCanvas" width="440" height="248"></canvas></div>
-
-    <div id="hud">
-      Этап 2 · <span id="hudMode">Сплит</span> · объектов: <span id="objCount">0</span>
-      · FOVv: <span id="hudFov">—</span>° · f: <span id="hudF">—</span> мм
-    </div>
+    <div id="view"></div>
+    <div id="hud">Этап 1 · Сцена 3D · объектов: <span id="objCount">0</span></div>
     <div class="toast" id="toast"></div>
   </div>
 
@@ -233,9 +176,10 @@
       <div class="body">
         <div id="propsEmpty" class="hint">Ничего не выделено. Выберите объект на сцене.</div>
         <div id="propsObj" style="display:none">
-          <div class="row"><label>Имя</label><input type="text" id="pName"></div>
+          <div class="row"><label>Имя</label>
+            <input type="text" id="pName"></div>
           <div class="row"><label>Роль</label>
-            <select id="pRole">
+            <select id="pRole" style="flex:1;background:#1a1a1a;color:var(--fg);border:1px solid var(--bd);border-radius:3px;padding:2px">
               <option value="main">главный</option>
               <option value="secondary">второстепенный</option>
               <option value="background">фон</option>
@@ -259,26 +203,32 @@
             <input type="number" step="0.05" id="pSY">
             <input type="number" step="0.05" id="pSZ">
           </div>
+
           <div id="pShapeBox" style="margin-top:6px">
             <div class="hint">Параметры фигуры</div>
             <div id="pShapeParams"></div>
           </div>
+
           <div class="row" style="margin-top:6px">
-            <label>Замок</label><input type="checkbox" id="pLocked">
-            <label style="margin-left:8px">Якорь</label><input type="checkbox" id="pAnchor">
-            <label style="margin-left:8px">Видим</label><input type="checkbox" id="pVisible" checked>
+            <label>Замок</label>
+            <input type="checkbox" id="pLocked">
+            <label style="margin-left:8px">Якорь</label>
+            <input type="checkbox" id="pAnchor">
+            <label style="margin-left:8px">Видим</label>
+            <input type="checkbox" id="pVisible" checked>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Цвет -->
-    <div class="panelSection collapsed" data-sec="color">
+    <div class="panelSection" data-sec="color">
       <h3>Цвет и материал</h3>
       <div class="body">
         <div class="row">
           <div class="swatch" id="colSwatch" style="background:#ff5533"></div>
           <input type="text" id="colHex" value="#ff5533" style="flex:1">
+          <button id="colPick" title="Пипетка (пока не реализована)">🎨</button>
         </div>
         <div class="row"><label>R</label>
           <input type="range" id="colR" min="0" max="255"><input type="number" id="colRn" min="0" max="255" style="width:56px"></div>
@@ -290,115 +240,51 @@
           <input type="range" id="colS" min="0" max="100"><input type="number" id="colSn" min="0" max="100" style="width:56px"></div>
         <div class="row"><label>V</label>
           <input type="range" id="colV" min="0" max="100"><input type="number" id="colVn" min="0" max="100" style="width:56px"></div>
-        <div class="hint">Материал плоский (без света). Цвет = заданный автором.</div>
+        <div class="hint">Материал: плоский (MeshBasicMaterial) — цвет на экране = заданный автором. Режим «со светом» появится позже.</div>
       </div>
     </div>
 
-    <!-- Камера кадра и объектив -->
-    <div class="panelSection" data-sec="camera">
+    <!-- Камера/Объектив — заглушка -->
+    <div class="panelSection collapsed" data-sec="camera">
       <h3>Камера и объектив</h3>
       <div class="body">
-        <div class="row">
-          <label>Сенсор</label>
-          <select id="camSensor"></select>
-        </div>
-        <div class="row">
-          <label>Формат</label>
-          <select id="camAspect"></select>
-        </div>
-        <div class="row">
-          <label>Фокусное</label>
-          <input type="range" id="camF" min="4" max="400" step="0.5">
-          <input type="number" id="camFn" min="4" max="400" step="0.5" style="width:64px">
-        </div>
-        <div class="row">
-          <label>Диафрагма</label>
-          <input type="range" id="camN" min="0.95" max="22" step="0.05">
-          <input type="number" id="camNn" min="0.95" max="22" step="0.05" style="width:64px">
-        </div>
-        <div class="row">
-          <label>Фокус (м)</label>
-          <input type="range" id="camS" min="0.1" max="100" step="0.05">
-          <input type="number" id="camSn" min="0.1" max="100" step="0.05" style="width:64px">
-        </div>
-
-        <div class="hint">Пресеты (мм)</div>
-        <div id="camPresets" class="grid4" style="margin-bottom:6px"></div>
-
-        <div class="hint">Режим смены объектива</div>
-        <div class="row">
-          <button id="modeA" class="on" title="Камера на месте, меняется только FOV">А · камера стоит</button>
-          <button id="modeB" title="Камера едет так, чтобы объект сохранил размер">Б · сохранить размер</button>
-        </div>
-        <div class="row">
-          <label>Главный</label>
-          <select id="camMainObj" style="flex:1"></select>
-        </div>
-
-        <div class="hint">Долли-зум (t = 0 → f1, t = 1 → f2)</div>
-        <div class="row">
-          <label>f1</label><input type="number" id="dollyF1" value="35" step="1" style="width:64px">
-          <label>f2</label><input type="number" id="dollyF2" value="85" step="1" style="width:64px">
-          <label>t</label><input type="range" id="dollyT" min="0" max="1" step="0.01" value="0" style="flex:1">
-        </div>
-
-        <div class="hint">Геометрия и физика</div>
-        <div class="kv">FOV гориз.: <b id="infoFovH">—</b></div>
-        <div class="kv">FOV верт.: <b id="infoFovV">—</b></div>
-        <div class="kv">FOV диаг.: <b id="infoFovD">—</b></div>
-        <div class="kv">Кроп-фактор: <b id="infoCrop">—</b></div>
-        <div class="kv">Экв. фокусное: <b id="infoEqF">—</b></div>
-        <div class="kv">Рабочий сенсор: <b id="infoWork">—</b></div>
-        <div class="kv">Гиперфокал H: <b id="infoH">—</b></div>
-        <div class="kv">ГРИП ближ./дальн.: <b id="infoDof">—</b></div>
-        <div class="kv">Виньетка (угол): <b id="infoVig">—</b></div>
-
-        <div class="hint" style="margin-top:8px">Пост-эффекты (дисторсия, боке, виньетка, squeeze) будут визуализированы в след. этапах. Сейчас показываются числа.</div>
-
-        <div class="row" style="margin-top:6px">
-          <button id="btnCompare4">Сравнить 24/35/50/85</button>
-        </div>
+        <div class="hint">Будет реализовано на Этапе 2: сенсор, фокусное расстояние, диафрагма, режимы (А)/(Б), долли-зум, сравнение объективов.</div>
       </div>
     </div>
 
     <!-- Сетки — заглушка -->
     <div class="panelSection collapsed" data-sec="grids">
       <h3>Сетки и направляющие</h3>
-      <div class="body"><div class="hint">Этап 3.</div></div>
+      <div class="body">
+        <div class="hint">Будет реализовано на Этапе 3: трети, золото, спираль, диагонали, безопасные зоны, рамки форматов, свои направляющие.</div>
+      </div>
     </div>
 
     <!-- Оценка — заглушка -->
     <div class="panelSection collapsed" data-sec="eval">
       <h3>Оценка кадра</h3>
-      <div class="body"><div class="hint">Этап 5.</div></div>
+      <div class="body">
+        <div class="hint">Будет реализовано на Этапе 5: критерии 9.1, 9.3, 9.4, 9.5, 9.6, профили «Классика»/«Свободный», тепловая карта.</div>
+      </div>
     </div>
 
     <!-- Объекты -->
-    <div class="panelSection collapsed" data-sec="objects">
+    <div class="panelSection" data-sec="objects">
       <h3>Объекты</h3>
-      <div class="body"><div id="objList"></div></div>
+      <div class="body">
+        <div id="objList"></div>
+      </div>
     </div>
   </div>
 
   <div id="film">
     <div class="filmItem on" id="filmMain">Кадр №1<br>(плёнка — Этап 4)</div>
-    <button id="btnAddFrame" disabled>+ Добавить кадр</button>
+    <button id="btnAddFrame" disabled title="Появится в этапе 4">+ Добавить кадр</button>
     <span class="hint" style="margin-left:auto">Плёнка появится в этапе 4</span>
   </div>
 </div>
 
-<!-- Модалка сравнения 4 объективов -->
-<div id="cmpModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center">
-  <div style="background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:12px;max-width:95vw;max-height:95vh;overflow:auto">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <b>Сравнение 24 / 35 / 50 / 85 мм · главный объект сохраняет размер</b>
-      <button id="cmpClose">Закрыть</button>
-    </div>
-    <div id="cmpGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"></div>
-    <div class="hint" style="margin-top:8px">Камера отъезжает пропорционально фокусному: d₂ = d₁·f₂/f₁ (раздел 8.3).</div>
-  </div>
-</div>
-
+<!-- three.js -->
 <script type="importmap">
 {
   "imports": {
@@ -414,30 +300,19 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
 /* ============================================================
-   State
+   Модуль State — единый источник правды
    ============================================================ */
 const State = (() => {
   const listeners = new Map();
   let project = null;
+
   const defaultProject = () => ({
-    version: 2, name:'Untitled', units:'m',
-    objects: [], frames: [],
-    settings: { profile:'classic', language:'ru', theme:'dark' },
-    // Настройки камеры кадра (одна общая на проект — кадры будут хранить копии)
-    shotCam: {
-      pos: [0, 1.6, 5],
-      yaw: 0, pitch: 0, roll: 0,
-      target: [0, 1, 0],
-      mode: 'free',           // free | lookAt
-      sensor: 'FF',
-      aspect: [16, 9],
-      focalMm: 50,
-      aperture: 4,
-      focusDistM: 5,
-      lensMode: 'A',          // 'A' | 'B'
-      mainObjId: null,
-      dollyF1: 35, dollyF2: 85, dollyT: 0
-    }
+    version: 1,
+    name: 'Untitled',
+    units: 'm',
+    objects: [],
+    frames: [],
+    settings: { profile: 'classic', language: 'ru', theme: 'dark' }
   });
 
   function on(evt, fn){
@@ -447,30 +322,44 @@ const State = (() => {
   }
   function emit(evt, payload){
     const s = listeners.get(evt);
-    if(s) s.forEach(fn => { try{ fn(payload); }catch(e){ console.error(e); } });
+    if(s) s.forEach(fn => { try { fn(payload); } catch(e){ console.error(e); } });
+    const all = listeners.get('*');
+    if(all) all.forEach(fn => { try { fn({evt, payload}); } catch(e){ console.error(e); } });
   }
+
   function load(){
     try{
       const raw = localStorage.getItem('framelab.project');
       project = raw ? JSON.parse(raw) : defaultProject();
-    }catch(e){ project = defaultProject(); }
+    }catch(e){
+      project = defaultProject();
+    }
     if(!project.objects) project.objects = [];
     if(!project.frames) project.frames = [];
-    // миграция
-    if(!project.shotCam) project.shotCam = defaultProject().shotCam;
     return project;
   }
   function save(){
-    try{ localStorage.setItem('framelab.project', JSON.stringify(project)); emit('saved'); }
-    catch(e){ console.error(e); }
+    try{
+      localStorage.setItem('framelab.project', JSON.stringify(project));
+      emit('saved');
+    }catch(e){ console.error('save failed', e); }
   }
   function get(){ return project; }
 
+  // Утилита: мутировать проект через историю
   const History = (() => {
     const past = [], future = [];
-    let txDepth = 0, txStart = null;
-    function snapshot(){ return JSON.stringify(project); }
-    function begin(){ if(txDepth === 0) txStart = snapshot(); txDepth++; }
+    let lastSnapshot = null;
+    let txDepth = 0;
+    let txStart = null;
+
+    function snapshot(){
+      return JSON.stringify(project);
+    }
+    function begin(){
+      if(txDepth === 0){ txStart = snapshot(); }
+      txDepth++;
+    }
     function end(){
       txDepth--;
       if(txDepth === 0 && txStart !== null){
@@ -482,191 +371,134 @@ const State = (() => {
         txStart = null;
       }
     }
-    function tx(fn){ begin(); try { return fn(); } finally { end(); } }
+    // Обёртка: fn() выполняется как одна транзакция
+    function tx(fn){
+      begin();
+      try { return fn(); }
+      finally { end(); }
+    }
+    function push(label){
+      // Ручная фиксация состояния (для случаев, когда мы уже изменили проект)
+      const s = snapshot();
+      if(s !== lastSnapshot){
+        past.push(lastSnapshot ?? s);
+        if(past.length > 100) past.shift();
+        future.length = 0;
+        lastSnapshot = s;
+      }
+    }
     function undo(){
-      if(!past.length) return false;
-      const cur = snapshot(); future.push(cur);
-      const prev = past.pop(); project = JSON.parse(prev);
-      emit('reloaded', project); return true;
+      if(past.length === 0) return false;
+      const cur = snapshot();
+      future.push(cur);
+      const prev = past.pop();
+      project = JSON.parse(prev);
+      lastSnapshot = prev;
+      emit('reloaded', project);
+      return true;
     }
     function redo(){
-      if(!future.length) return false;
-      const cur = snapshot(); past.push(cur);
-      const next = future.pop(); project = JSON.parse(next);
-      emit('reloaded', project); return true;
+      if(future.length === 0) return false;
+      const cur = snapshot();
+      past.push(cur);
+      const next = future.pop();
+      project = JSON.parse(next);
+      lastSnapshot = next;
+      emit('reloaded', project);
+      return true;
     }
-    function reset(){ past.length = 0; future.length = 0; }
-    return { tx, undo, redo, reset };
+    function reset(){ past.length = 0; future.length = 0; lastSnapshot = snapshot(); }
+    return { tx, push, undo, redo, reset };
   })();
 
   return { on, emit, load, save, get, History };
 })();
 
 /* ============================================================
-   Utils
+   Модуль Utils — id, математика, цвет
    ============================================================ */
 const Utils = {
-  uid(){ return Math.random().toString(36).slice(2,10); },
-  clamp(v,a,b){ return Math.max(a, Math.min(b, v)); },
-  deg(r){ return r * 180 / Math.PI; },
-  rad(d){ return d * Math.PI / 180; },
+  uid(){ return Math.random().toString(36).slice(2, 10); },
+
+  // sRGB (0-255) -> HSV (h 0-360, s 0-1, v 0-1)
   rgbToHsv(r,g,b){
     r/=255; g/=255; b/=255;
     const max = Math.max(r,g,b), min = Math.min(r,g,b);
-    const v = max, d = max-min;
-    if(d === 0) return { h:0, s:0, v };
+    const v = max, d = max - min;
     let h = 0;
-    const s = d/max;
-    if(max === r) h = ((g-b)/d + (g<b?6:0)) * 60;
-    else if(max === g) h = ((b-r)/d + 2) * 60;
-    else h = ((r-g)/d + 4) * 60;
-    return { h, s, v };
+    if(d !== 0){
+      const s = d / max;
+      if(max === r) h = ((g-b)/d + (g<b?6:0)) * 60;
+      else if(max === g) h = ((b-r)/d + 2) * 60;
+      else h = ((r-g)/d + 4) * 60;
+      return { h, s, v };
+    }
+    return { h: 0, s: 0, v };
   },
+  // HSV -> sRGB (0-255)
   hsvToRgb(h,s,v){
-    h = ((h%360)+360)%360;
-    const c = v*s, x = c*(1-Math.abs(((h/60)%2)-1)), m = v-c;
+    h = ((h % 360) + 360) % 360;
+    const c = v * s;
+    const x = c * (1 - Math.abs(((h/60) % 2) - 1));
+    const m = v - c;
     let r=0,g=0,b=0;
-    if(h<60){r=c;g=x;} else if(h<120){r=x;g=c;} else if(h<180){g=c;b=x;}
-    else if(h<240){g=x;b=c;} else if(h<300){r=x;b=c;} else {r=c;b=x;}
-    return { r:Math.round((r+m)*255), g:Math.round((g+m)*255), b:Math.round((b+m)*255) };
+    if(h < 60){ r=c; g=x; }
+    else if(h < 120){ r=x; g=c; }
+    else if(h < 180){ g=c; b=x; }
+    else if(h < 240){ g=x; b=c; }
+    else if(h < 300){ r=x; b=c; }
+    else { r=c; b=x; }
+    return {
+      r: Math.round((r+m)*255),
+      g: Math.round((g+m)*255),
+      b: Math.round((b+m)*255)
+    };
   },
-  rgbToHex(r,g,b){ const t=n=>n.toString(16).padStart(2,'0'); return '#'+t(r)+t(g)+t(b); },
+  rgbToHex(r,g,b){
+    const to = n => n.toString(16).padStart(2,'0');
+    return '#' + to(r) + to(g) + to(b);
+  },
   hexToRgb(hex){
     const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
     if(!m) return null;
-    const n = parseInt(m[1],16);
+    const n = parseInt(m[1], 16);
     return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 };
   }
 };
 
 /* ============================================================
-   LensModel — чистые функции оптики (раздел 8 ТЗ)
-   ============================================================ */
-const LensModel = (() => {
-  // Размеры сенсоров (мм), раздел 8.1
-  const SENSORS = {
-    FF:    { w:36.0, h:24.0, name:'Полный кадр (FF) 36×24' },
-    APSC_SONY: { w:23.6, h:15.6, name:'APS-C (Sony/Nikon) 23.6×15.6' },
-    APSC_CANON:{ w:22.3, h:14.9, name:'APS-C (Canon) 22.3×14.9' },
-    MFT:   { w:17.3, h:13.0, name:'Micro 4/3 17.3×13.0' },
-    S35:   { w:24.9, h:18.7, name:'Super 35 24.9×18.7' },
-    MF44:  { w:43.8, h:32.9, name:'Средний формат 44×33' }
-  };
-  const FF_DIAG = Math.sqrt(36*36 + 24*24); // 43.267
-
-  // Рабочая область сенсора с учётом аспекта кадра (раздел 8.1)
-  function workingArea(sensorKey, aspect){
-    const s = SENSORS[sensorKey];
-    const aspectFrame = aspect[0]/aspect[1];
-    const aspectSensor = s.w / s.h;
-    // Вписываем кадровое окно в сенсор: используем ширину сенсора,
-    // считаем высоту по аспекту кадра. Если получается выше сенсора —
-    // используем высоту сенсора, ширину по аспекту.
-    let w = s.w, h = s.w / aspectFrame;
-    if(h > s.h){ h = s.h; w = s.h * aspectFrame; }
-    void aspectSensor;
-    return { w, h };
-  }
-
-  function cropFactor(sensorKey){
-    const s = SENSORS[sensorKey];
-    return FF_DIAG / Math.sqrt(s.w*s.w + s.h*s.h);
-  }
-
-  function fovRad(working, f){
-    return {
-      h: 2*Math.atan(working.w / (2*f)),
-      v: 2*Math.atan(working.h / (2*f)),
-      d: 2*Math.atan(Math.sqrt(working.w*working.w + working.h*working.h) / (2*f))
-    };
-  }
-
-  function c_of_circle(sensorKey){
-    return 0.03 / cropFactor(sensorKey);
-  }
-
-  // Гиперфокал и ГРИП (раздел 8.4), f, s в мм, N безразмерный
-  function dof(f, N, s, sensorKey){
-    const c = c_of_circle(sensorKey);
-    const H = f*f / (N*c) + f;
-    const Dn = s*(H - f) / (H + s - 2*f);
-    const Df = (s < H) ? s*(H - f) / (H - s) : Infinity;
-    return { H, Dn, Df, c };
-  }
-
-  // Виньетка: I = cos^4(θ), θ = atan(r/f) (раздел 8.5)
-  function vignetteAt(f, r_mm){
-    const theta = Math.atan(r_mm / f);
-    return Math.pow(Math.cos(theta), 4);
-  }
-
-  // Полная модель — единый вызов
-  function compute(settings){
-    const { sensor, aspect, focalMm, aperture, focusDistM } = settings;
-    const working = workingArea(sensor, aspect);
-    const fov = fovRad(working, focalMm);
-    const crop = cropFactor(sensor);
-    // Угол FF-эквивалент: как если бы этот же кадр снимался на FF при том же
-    // размере рабочего окна по горизонтали. Для упрощения — по диагонали.
-    const eqF = focalMm * crop;
-    // диагональ рабочего окна
-    const rDiag = Math.sqrt(working.w*working.w + working.h*working.h) / 2;
-    const vign = vignetteAt(focalMm, rDiag);
-    const df = dof(focalMm, aperture, focusDistM*1000, sensor);
-    return {
-      working,
-      fovH: Utils.deg(fov.h),
-      fovV: Utils.deg(fov.v),
-      fovD: Utils.deg(fov.d),
-      crop,
-      eqF,
-      H: df.H,
-      Dn: df.Dn,
-      Df: df.Df,
-      c: df.c,
-      vignetteCorner: vign
-    };
-  }
-
-  return { SENSORS, FF_DIAG, workingArea, cropFactor, fovRad, dof, vignetteAt, compute };
-})();
-
-/* ============================================================
-   SceneManager — three.js сцена (сцена + редактор-камера)
+   Модуль SceneManager — three.js сцена, объекты, выделение, гизмо
    ============================================================ */
 const SceneManager = (() => {
   let renderer, scene, editorCamera, orbit, tcontrols;
   let container;
-  let rootGroup;
-  const objectMap = new Map();
-  const objectData = new Map();
+  let rootGroup;                 // сюда добавляются объекты
+  const objectMap = new Map();   // objId -> THREE.Object3D
+  const objectData = new Map();  // objId -> Obj (ссылка на данные State)
   let selectedId = null;
   let gizmoMode = 'translate';
   let axisLock = 'none';
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
+
   const events = new Map();
-
-  // Визуализация камеры кадра (frustum)
-  let camFrustumGroup, camFrustumLine, camFrameLine, camTargetHelper;
-
   function on(evt, fn){
     if(!events.has(evt)) events.set(evt, new Set());
     events.get(evt).add(fn);
   }
   function emit(evt, payload){
     const s = events.get(evt);
-    if(s) s.forEach(fn => { try{ fn(payload); }catch(e){ console.error(e); } });
+    if(s) s.forEach(fn => { try{ fn(payload); }catch(e){ console.error(e);} });
   }
 
   function init(el){
     container = el;
-    const w = el.clientWidth || 800, h = el.clientHeight || 600;
+    const w = el.clientWidth, h = el.clientHeight;
 
-    renderer = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
+    renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(w, h);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.outputColorSpace = THREE.SRGBColorSpace; // раздел 5.3
     el.appendChild(renderer.domElement);
 
     scene = new THREE.Scene();
@@ -675,65 +507,67 @@ const SceneManager = (() => {
     rootGroup = new THREE.Group();
     scene.add(rootGroup);
 
+    // Камера редактора (в этапе 2 будет отдельная камера кадра)
     editorCamera = new THREE.PerspectiveCamera(50, w/h, 0.05, 500);
     editorCamera.position.set(4, 3, 6);
 
+    // OrbitControls — это и есть "орбита редактора" (см. 6.1а)
     orbit = new OrbitControls(editorCamera, renderer.domElement);
     orbit.target.set(0, 1, 0);
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.08;
     orbit.screenSpacePanning = true;
-    orbit.mouseButtons = { LEFT:null, MIDDLE:THREE.MOUSE.DOLLY, RIGHT:THREE.MOUSE.PAN };
-    orbit.touches = { ONE:THREE.TOUCH.ROTATE, TWO:THREE.TOUCH.DOLLY_PAN };
+    orbit.mouseButtons = {
+      LEFT: null, // ЛКМ — выделение
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN
+    };
+    orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
+    // Сетка мира 1 м (10 делений по 0.1 м), подсказка масштаба
     const grid = new THREE.GridHelper(20, 200, 0x444444, 0x2a2a2a);
+    grid.position.y = 0;
     scene.add(grid);
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(20,20),
+      new THREE.PlaneGeometry(20, 20),
       new THREE.MeshBasicMaterial({ color:0x1a1a1a, transparent:true, opacity:0.35 })
     );
     ground.rotation.x = -Math.PI/2;
     ground.position.y = -0.001;
     scene.add(ground);
-    scene.add(new THREE.AxesHelper(1.5));
 
+    // Оси
+    const axes = new THREE.AxesHelper(1.5);
+    axes.position.y = 0.001;
+    scene.add(axes);
+
+    // TransformControls
     tcontrols = new TransformControls(editorCamera, renderer.domElement);
     tcontrols.setSize(0.8);
     tcontrols.addEventListener('dragging-changed', e => {
       orbit.enabled = !e.value;
-      if(!e.value) commitTransform();
+      if(!e.value){
+        // Фиксируем позицию/поворот/масштаб в данных
+        commitTransform();
+      }
     });
-    tcontrols.addEventListener('objectChange', () => emit('transformChanged', getSelectedData()));
+    tcontrols.addEventListener('objectChange', () => {
+      // На лету показываем числа в панели
+      emit('transformChanged', getSelectedData());
+    });
     scene.add(tcontrols);
 
-    // Визуализация камеры кадра
-    camFrustumGroup = new THREE.Group();
-    scene.add(camFrustumGroup);
-    camFrustumLine = new THREE.LineSegments(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color:0xffcc00 })
-    );
-    camFrustumGroup.add(camFrustumLine);
-    camFrameLine = new THREE.LineLoop(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color:0xffcc00 })
-    );
-    camFrustumGroup.add(camFrameLine);
-    camTargetHelper = new THREE.Mesh(
-      new THREE.SphereGeometry(0.04, 8, 6),
-      new THREE.MeshBasicMaterial({ color:0xffcc00 })
-    );
-    camFrustumGroup.add(camTargetHelper);
-
+    // События мыши
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('resize', resize);
     window.addEventListener('keydown', onKey);
+
     animate();
   }
 
   function resize(){
     if(!container) return;
-    const w = container.clientWidth || 1, h = container.clientHeight || 1;
+    const w = container.clientWidth, h = container.clientHeight;
     editorCamera.aspect = w / h;
     editorCamera.updateProjectionMatrix();
     renderer.setSize(w, h);
@@ -747,10 +581,11 @@ const SceneManager = (() => {
 
   function onPointerDown(e){
     if(e.button !== 0) return;
+    // Если тянем гизмо — игнорируем
     if(tcontrols.dragging) return;
     const rect = renderer.domElement.getBoundingClientRect();
-    mouse.x = ((e.clientX - rect.left)/rect.width)*2 - 1;
-    mouse.y = -((e.clientY - rect.top)/rect.height)*2 + 1;
+    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(mouse, editorCamera);
     const hits = raycaster.intersectObjects(Array.from(objectMap.values()), true);
     if(hits.length > 0){
@@ -760,6 +595,7 @@ const SceneManager = (() => {
       select(null);
     }
   }
+
   function findObjByObject3D(o){
     let cur = o;
     while(cur){
@@ -771,24 +607,32 @@ const SceneManager = (() => {
 
   function onKey(e){
     if(e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-    const k = e.key.toLowerCase();
-    if(k === 'g') setGizmoMode('translate');
-    else if(k === 'r') setGizmoMode('rotate');
-    else if(k === 's') setGizmoMode('scale');
-    else if(k === 'x') setAxis('x');
-    else if(k === 'y') setAxis('y');
-    else if(k === 'z') setAxis('z');
-    else if(k === 'f') fitView();
-    else if(e.key === 'Escape') select(null);
+    if(e.key === 'g' || e.key === 'G'){ setGizmoMode('translate'); }
+    else if(e.key === 'r' || e.key === 'R'){ setGizmoMode('rotate'); }
+    else if(e.key === 's' || e.key === 'S'){ setGizmoMode('scale'); }
+    else if(e.key === 'x' || e.key === 'X'){ setAxis('x'); }
+    else if(e.key === 'y' || e.key === 'Y'){ setAxis('y'); }
+    else if(e.key === 'z' || e.key === 'Z'){ setAxis('z'); }
+    else if(e.key === 'f' || e.key === 'F'){ fitView(); }
+    else if(e.key === 'Escape'){ select(null); }
   }
 
+  /* ---------- Создание three.js-объекта по данным Obj ---------- */
   function buildMesh(data){
     const g = new THREE.Group();
     g.userData.objId = data.id;
+
     const color = new THREE.Color(data.color.r/255, data.color.g/255, data.color.b/255);
-    const mat = new THREE.MeshBasicMaterial({ color, side:THREE.DoubleSide });
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      side: THREE.DoubleSide,
+      transparent: false
+    });
+
     const p = data.params || {};
     let geom = null;
+    let extraMesh = null;
+
     switch(data.type){
       case 'point': {
         const d = p.size ?? 0.05;
@@ -796,45 +640,68 @@ const SceneManager = (() => {
         break;
       }
       case 'line': {
-        const L = p.length ?? 1, t = p.thickness ?? 0.01;
+        const L = p.length ?? 1;
+        const t = p.thickness ?? 0.01;
+        // Параллелепипед вытянут по X; в данных длина по локальной X
         geom = new THREE.BoxGeometry(L, t, t);
+        // Сдвигаем так, чтобы центр объекта был серединой отрезка:
+        // оставим центрированным (проще для вращения и масштаба).
         break;
       }
       case 'rect': {
-        const w = p.width ?? 1, h = p.height ?? 1, ex = p.extrude ?? 0;
-        geom = ex > 0 ? new THREE.BoxGeometry(w, h, ex) : new THREE.PlaneGeometry(w, h);
+        const w = p.width ?? 1, h = p.height ?? 1, e = p.extrude ?? 0;
+        if(e > 0) geom = new THREE.BoxGeometry(w, h, e);
+        else geom = new THREE.PlaneGeometry(w, h);
         break;
       }
       case 'circle': {
-        const r = p.radius ?? 0.5, ex = p.extrude ?? 0;
-        geom = ex > 0
-          ? new THREE.CylinderGeometry(r, r, ex, 64)
-          : new THREE.CircleGeometry(r, 64);
+        const r = p.radius ?? 0.5;
+        const seg = 64;
+        const e = p.extrude ?? 0;
+        if(e > 0) geom = new THREE.CylinderGeometry(r, r, e, seg);
+        else geom = new THREE.CircleGeometry(r, seg);
         break;
       }
       case 'polygon': {
         const n = Math.max(3, Math.min(24, Math.round(p.n ?? 3)));
-        const r = p.radius ?? 0.5, ex = p.extrude ?? 0;
-        const shape = new THREE.Shape();
-        for(let i=0;i<n;i++){
-          const a = Math.PI/2 + i*2*Math.PI/n;
-          const x = Math.cos(a)*r, y = Math.sin(a)*r;
-          if(i===0) shape.moveTo(x,y); else shape.lineTo(x,y);
-        }
-        shape.closePath();
-        if(ex > 0){
-          geom = new THREE.ExtrudeGeometry(shape, { depth:ex, bevelEnabled:false });
-          geom.translate(0,0,-ex/2);
+        const r = p.radius ?? 0.5;
+        const e = p.extrude ?? 0;
+        // thetaStart = 90° — первая вершина смотрит вверх (раздел 5.1)
+        if(e > 0){
+          geom = new THREE.CylinderGeometry(r, r, e, n);
+          // У цилиндра первой вершиной считается не «вверх», а фиксированная точка.
+          // Для честного «угол вверх» используем ExtrudeGeometry из Shape.
+          const shape = new THREE.Shape();
+          for(let i=0;i<n;i++){
+            const a = Math.PI/2 + i * 2*Math.PI/n;
+            const x = Math.cos(a)*r, y = Math.sin(a)*r;
+            if(i===0) shape.moveTo(x,y); else shape.lineTo(x,y);
+          }
+          shape.closePath();
+          geom = new THREE.ExtrudeGeometry(shape, { depth:e, bevelEnabled:false });
+          geom.translate(0,0,-e/2);
         } else {
+          const shape = new THREE.Shape();
+          for(let i=0;i<n;i++){
+            const a = Math.PI/2 + i * 2*Math.PI/n;
+            const x = Math.cos(a)*r, y = Math.sin(a)*r;
+            if(i===0) shape.moveTo(x,y); else shape.lineTo(x,y);
+          }
+          shape.closePath();
           geom = new THREE.ShapeGeometry(shape);
         }
         break;
       }
-      default: geom = new THREE.BoxGeometry(0.5,0.5,0.5);
+      default: {
+        geom = new THREE.BoxGeometry(0.5,0.5,0.5);
+      }
     }
+
     const mesh = new THREE.Mesh(geom, mat);
     mesh.userData.objId = data.id;
     g.add(mesh);
+
+    // Материал сохраним, чтобы потом менять цвет
     g.userData.mesh = mesh;
     return g;
   }
@@ -844,27 +711,38 @@ const SceneManager = (() => {
     if(!g) return;
     g.position.set(...data.transform.pos);
     g.rotation.set(
-      Utils.rad(data.transform.rotEuler[0]),
-      Utils.rad(data.transform.rotEuler[1]),
-      Utils.rad(data.transform.rotEuler[2])
+      THREE.MathUtils.degToRad(data.transform.rotEuler[0]),
+      THREE.MathUtils.degToRad(data.transform.rotEuler[1]),
+      THREE.MathUtils.degToRad(data.transform.rotEuler[2])
     );
     g.scale.set(...data.transform.scale);
     g.visible = data.visible !== false;
   }
+
   function applyColor(data){
     const g = objectMap.get(data.id);
     if(!g) return;
-    const m = g.userData.mesh?.material;
-    if(m) m.color.setRGB(data.color.r/255, data.color.g/255, data.color.b/255, THREE.SRGBColorSpace);
+    const mesh = g.userData.mesh;
+    if(mesh && mesh.material){
+      mesh.material.color.setRGB(
+        data.color.r/255, data.color.g/255, data.color.b/255,
+        THREE.SRGBColorSpace
+      );
+    }
   }
 
+  // Полная пересборка всех объектов из данных
   function rebuild(){
+    // Удалить все
     for(const [id, g] of objectMap){
       rootGroup.remove(g);
       g.traverse(o => { if(o.geometry) o.geometry.dispose(); if(o.material) o.material.dispose(); });
     }
-    objectMap.clear(); objectData.clear();
-    for(const data of State.get().objects){
+    objectMap.clear();
+    objectData.clear();
+
+    const project = State.get();
+    for(const data of project.objects){
       const g = buildMesh(data);
       rootGroup.add(g);
       objectMap.set(data.id, g);
@@ -873,8 +751,11 @@ const SceneManager = (() => {
     }
     emit('rebuilt');
   }
+
+  // Пересборка одной фигуры (когда меняются параметры, влияющие на геометрию)
   function rebuildOne(id){
-    const data = objectData.get(id); if(!data) return;
+    const data = objectData.get(id);
+    if(!data) return;
     const old = objectMap.get(id);
     if(old){
       rootGroup.remove(old);
@@ -891,7 +772,8 @@ const SceneManager = (() => {
   /* ---------- Публичный API ---------- */
   function addObject(type){
     const project = State.get();
-    let params = {}, name = '';
+    let params = {};
+    let name = '';
     switch(type){
       case 'point':   params = { size:0.05 }; name = 'Точка'; break;
       case 'line':    params = { length:1, thickness:0.01 }; name = 'Линия'; break;
@@ -900,25 +782,44 @@ const SceneManager = (() => {
       case 'polygon': params = { n:3, radius:0.5, extrude:0 }; name = 'Полигон'; break;
     }
     const data = {
-      id: Utils.uid(), name, type, params,
-      transform:{ pos:[0,0.5,0], rotEuler:[0,0,0], scale:[1,1,1] },
-      color:{ r:255, g:85, b:51 },
-      role:'main', facing:null, locked:false, anchor:false, visible:true
+      id: Utils.uid(),
+      name,
+      type,
+      params,
+      transform: { pos:[0,0.5,0], rotEuler:[0,0,0], scale:[1,1,1] },
+      color: { r:255, g:85, b:51 },
+      role: 'main',
+      facing: null,
+      locked: false,
+      anchor: false,
+      visible: true
     };
-    State.History.tx(() => { project.objects.push(data); });
+    State.History.tx(() => {
+      project.objects.push(data);
+      rebuildOne(data.id);   // не пересобираем всё — просто добавляем
+      // rebuildOne ожидает объект в objectData; добавим вручную
+      // На самом деле rebuildOne берёт из objectData; сделаем чуть иначе:
+    });
+    // Проще: пересобрать всё (объектов пока немного)
+    State.History.tx(() => { /* уже добавлено */ });
     rebuild();
     select(data.id);
     State.save();
     return data;
   }
+
   function deleteObject(id){
     const project = State.get();
     const idx = project.objects.findIndex(o => o.id === id);
     if(idx < 0) return;
-    State.History.tx(() => { project.objects.splice(idx, 1); });
+    State.History.tx(() => {
+      project.objects.splice(idx, 1);
+    });
     if(selectedId === id) select(null);
-    rebuild(); State.save();
+    rebuild();
+    State.save();
   }
+
   function duplicateSelected(){
     const project = State.get();
     if(!selectedId) return;
@@ -929,34 +830,56 @@ const SceneManager = (() => {
     copy.name = src.name + ' копия';
     copy.transform.pos[0] += 0.2;
     State.History.tx(() => { project.objects.push(copy); });
-    rebuild(); select(copy.id); State.save();
+    rebuild();
+    select(copy.id);
+    State.save();
   }
+
   function select(id){
     if(selectedId === id) return;
     selectedId = id;
     if(id){
       const g = objectMap.get(id);
-      const d = objectData.get(id);
-      if(g && !d?.locked){ tcontrols.attach(g); tcontrols.enabled = true; }
-      else tcontrols.detach();
-    } else tcontrols.detach();
+      if(g && !objectData.get(id)?.locked){
+        tcontrols.attach(g);
+        tcontrols.enabled = true;
+      } else {
+        tcontrols.detach();
+      }
+    } else {
+      tcontrols.detach();
+    }
     emit('selectionChanged', getSelectedData());
   }
-  function getSelectedData(){ return selectedId ? objectData.get(selectedId) : null; }
+
+  function getSelectedData(){
+    if(!selectedId) return null;
+    return objectData.get(selectedId) || null;
+  }
   function getSelectedId(){ return selectedId; }
-  function setGizmoMode(m){
-    gizmoMode = m;
-    tcontrols.setMode(m);
-    emit('gizmoMode', m);
+
+  function setGizmoMode(mode){
+    gizmoMode = mode;
+    tcontrols.setMode(mode);
+    tcontrols.showX = true; tcontrols.showY = true; tcontrols.showZ = true;
+    emit('gizmoMode', mode);
   }
   function getGizmoMode(){ return gizmoMode; }
-  function setAxis(a){
-    axisLock = a;
-    if(a === 'none'){ tcontrols.showX = tcontrols.showY = tcontrols.showZ = true; }
-    else { tcontrols.showX = a === 'x'; tcontrols.showY = a === 'y'; tcontrols.showZ = a === 'z'; }
-    emit('axisLock', a);
+
+  function setAxis(axis){
+    axisLock = axis;
+    if(axis === 'none'){
+      tcontrols.showX = tcontrols.showY = tcontrols.showZ = true;
+    } else {
+      tcontrols.showX = axis === 'x';
+      tcontrols.showY = axis === 'y';
+      tcontrols.showZ = axis === 'z';
+    }
+    emit('axisLock', axis);
   }
   function getAxis(){ return axisLock; }
+
+  // После перетаскивания гизмо — фиксируем в данных
   function commitTransform(){
     const data = getSelectedData();
     const g = objectMap.get(data?.id);
@@ -964,247 +887,64 @@ const SceneManager = (() => {
     State.History.tx(() => {
       data.transform.pos = [g.position.x, g.position.y, g.position.z];
       data.transform.rotEuler = [
-        Utils.deg(g.rotation.x), Utils.deg(g.rotation.y), Utils.deg(g.rotation.z)
+        THREE.MathUtils.radToDeg(g.rotation.x),
+        THREE.MathUtils.radToDeg(g.rotation.y),
+        THREE.MathUtils.radToDeg(g.rotation.z)
       ];
       data.transform.scale = [g.scale.x, g.scale.y, g.scale.z];
     });
     State.save();
     emit('transformChanged', data);
   }
-  function updateTransformFromData(data){ applyTransform(data); emit('transformChanged', data); }
-  function updateColorFromData(data){ applyColor(data); }
-  function updateParamsFromData(data){ rebuildOne(data.id); }
+
+  function updateTransformFromData(data){
+    applyTransform(data);
+    emit('transformChanged', data);
+  }
+  function updateColorFromData(data){
+    applyColor(data);
+  }
+  function updateParamsFromData(data){
+    rebuildOne(data.id);
+  }
 
   function fitView(){
+    // Просто разводим камеру так, чтобы влезли все объекты
     const box = new THREE.Box3();
     let any = false;
     objectMap.forEach(g => { box.expandByObject(g); any = true; });
     if(!any){
-      editorCamera.position.set(4,3,6); orbit.target.set(0,0,0); return;
+      editorCamera.position.set(4,3,6);
+      orbit.target.set(0,0,0);
+      return;
     }
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const fov = Utils.rad(editorCamera.fov);
+    const fov = editorCamera.fov * Math.PI/180;
     const dist = (maxDim/2) / Math.tan(fov/2) * 2.2;
     editorCamera.position.copy(center).add(new THREE.Vector3(dist, dist*0.7, dist));
-    orbit.target.copy(center); orbit.update();
-  }
-
-  function setEditorViewPreset(name){
-    const box = new THREE.Box3();
-    objectMap.forEach(g => box.expandByObject(g));
-    const center = box.isEmpty() ? new THREE.Vector3(0,1,0) : box.getCenter(new THREE.Vector3());
-    const size = box.isEmpty() ? new THREE.Vector3(1,1,1) : box.getSize(new THREE.Vector3());
-    const d = Math.max(size.x, size.y, size.z) * 2.5 || 5;
-    switch(name){
-      case 'front': editorCamera.position.set(center.x, center.y, center.z + d); break;
-      case 'top':   editorCamera.position.set(center.x, center.y + d, center.z + 0.001); break;
-      case 'left':  editorCamera.position.set(center.x - d, center.y, center.z); break;
-      case 'right': editorCamera.position.set(center.x + d, center.y, center.z); break;
-      default:      editorCamera.position.set(center.x + d*0.7, center.y + d*0.5, center.z + d); break;
-    }
     orbit.target.copy(center);
     orbit.update();
   }
 
-  // Обновление визуализации камеры кадра в сцене
-  function updateShotCamViz(shot, lens){
-    // Позиция: pos + направление (yaw, pitch)
-    const pos = new THREE.Vector3(...shot.pos);
-    const dir = shotDir(shot);
-    // Строим пирамиду: длинная грань ~ 1.5 м по направлению
-    const depth = 1.5;
-    const halfW = Math.tan(Utils.rad(lens.fovH/2)) * depth;
-    const halfH = Math.tan(Utils.rad(lens.fovV/2)) * depth;
-
-    // Локальные координаты пирамиды: +Z = вперёд
-    const up = new THREE.Vector3(0,1,0);
-    const right = new THREE.Vector3().crossVectors(dir, up).normalize();
-    if(right.lengthSq() < 1e-6) right.set(1,0,0);
-    const realUp = new THREE.Vector3().crossVectors(right, dir).normalize();
-
-    const farCenter = pos.clone().add(dir.clone().multiplyScalar(depth));
-    const cornersFar = [
-      farCenter.clone().add(right.clone().multiplyScalar(-halfW)).add(realUp.clone().multiplyScalar(-halfH)),
-      farCenter.clone().add(right.clone().multiplyScalar( halfW)).add(realUp.clone().multiplyScalar(-halfH)),
-      farCenter.clone().add(right.clone().multiplyScalar( halfW)).add(realUp.clone().multiplyScalar( halfH)),
-      farCenter.clone().add(right.clone().multiplyScalar(-halfW)).add(realUp.clone().multiplyScalar( halfH))
-    ];
-
-    // Рёбра: 4 от камеры к углам + рамка
-    const lines = [];
-    for(const c of cornersFar){
-      lines.push(pos.x, pos.y, pos.z, c.x, c.y, c.z);
-    }
-    // Рамка
-    for(let i=0;i<4;i++){
-      const a = cornersFar[i], b = cornersFar[(i+1)%4];
-      lines.push(a.x,a.y,a.z, b.x,b.y,b.z);
-    }
-    camFrustumLine.geometry.dispose();
-    camFrustumLine.geometry = new THREE.BufferGeometry();
-    camFrustumLine.geometry.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
-
-    // Рамка кадра (LineLoop)
-    const framePts = [];
-    for(const c of cornersFar) framePts.push(c.x, c.y, c.z);
-    camFrameLine.geometry.dispose();
-    camFrameLine.geometry = new THREE.BufferGeometry();
-    camFrameLine.geometry.setAttribute('position', new THREE.Float32BufferAttribute(framePts, 3));
-
-    // Точка цели
-    camTargetHelper.position.copy(new THREE.Vector3(...(shot.target || [0,1,0])));
-  }
-
-  function shotDir(shot){
-    // yaw — вокруг Y, pitch — вокруг X. Соответствует three.js камере, смотрящей в -Z.
-    // Направление камеры в world = applyEuler(yaw, pitch).
-    const e = new THREE.Euler(Utils.rad(shot.pitch), Utils.rad(shot.yaw), Utils.rad(shot.roll||0), 'YXZ');
-    const v = new THREE.Vector3(0,0,-1).applyEuler(e);
-    return v.normalize();
-  }
-
   return {
-    init, on, resize,
+    init, on,
     addObject, deleteObject, duplicateSelected, select,
     getSelectedData, getSelectedId,
     setGizmoMode, getGizmoMode, setAxis, getAxis,
     commitTransform, updateTransformFromData, updateColorFromData,
-    updateParamsFromData, rebuild, rebuildOne, fitView, setEditorViewPreset,
-    updateShotCamViz, shotDir,
+    updateParamsFromData, rebuild, rebuildOne, fitView,
     get three(){ return { scene, editorCamera, renderer, orbit, tcontrols, rootGroup }; }
   };
 })();
 
 /* ============================================================
-   CameraRig — камера кадра, управление, режимы А/Б, долли-зум
-   ============================================================ */
-const CameraRig = (() => {
-  let shotCamera;    // THREE.PerspectiveCamera — камера кадра
-  let initialized = false;
-  const events = new Map();
-  function on(e, f){ if(!events.has(e)) events.set(e, new Set()); events.get(e).add(f); }
-  function emit(e, p){ const s = events.get(e); if(s) s.forEach(f => { try{ f(p); }catch(err){ console.error(err); } }); }
-
-  function ensure(){
-    if(initialized) return;
-    shotCamera = new THREE.PerspectiveCamera(50, 16/9, 0.1, 200);
-    initialized = true;
-  }
-
-  // Применить настройки кадра к THREE-камере
-  function apply(shotCam, lens){
-    ensure();
-    shotCamera.fov = lens.fovV;
-    shotCamera.aspect = shotCam.aspect[0] / shotCam.aspect[1];
-    shotCamera.near = 0.05;
-    shotCamera.far = 500;
-    shotCamera.updateProjectionMatrix();
-    shotCamera.position.set(...shotCam.pos);
-    const e = new THREE.Euler(
-      Utils.rad(shotCam.pitch),
-      Utils.rad(shotCam.yaw),
-      Utils.rad(shotCam.roll || 0),
-      'YXZ'
-    );
-    shotCamera.quaternion.setFromEuler(e);
-    // Если режим lookAt — нацелить на target
-    if(shotCam.mode === 'lookAt'){
-      shotCamera.lookAt(new THREE.Vector3(...shotCam.target));
-    }
-    return shotCamera;
-  }
-
-  // Режим (А): меняем только фокусное, камера стоит
-  // Режим (Б): двигаем камеру вдоль луча от главного объекта на камеру так,
-  // чтобы размер объекта сохранился: d' = d * f'/f.
-  function changeFocal(shotCam, newF, mode, mainObjPos){
-    const oldF = shotCam.focalMm;
-    if(Math.abs(newF - oldF) < 1e-6){ return { moved: false }; }
-    if(mode === 'A'){
-      shotCam.focalMm = newF;
-      return { moved: false, f: newF };
-    }
-    // Режим Б
-    const f1 = oldF, f2 = newF;
-    const camPos = new THREE.Vector3(...shotCam.pos);
-    const target = mainObjPos ? new THREE.Vector3(...mainObjPos) : new THREE.Vector3(...(shotCam.target || [0,1,0]));
-    const dirToTarget = target.clone().sub(camPos);
-    const d1 = dirToTarget.length();
-    if(d1 < 1e-4){ shotCam.focalMm = newF; return { moved: false }; }
-    const d2 = d1 * f2 / f1;
-    const newCamPos = target.clone().sub(dirToTarget.clone().normalize().multiplyScalar(d2));
-    shotCam.pos = [newCamPos.x, newCamPos.y, newCamPos.z];
-    shotCam.focalMm = newF;
-    // Расстояние до фокуса тоже пересчитаем пропорционально, чтобы ГРИП
-    // сохраняла относительное поведение — необязательно, но логично.
-    if(shotCam.focusDistM && shotCam.focusDistM > 0){
-      shotCam.focusDistM = Math.max(0.1, shotCam.focusDistM * f2 / f1);
-    }
-    return { moved: true, d1, d2 };
-  }
-
-  // Долли-зум: f(t) = lerp(f1, f2, t); d(t) = d1 * f(t)/f1.
-  // d1 = текущее расстояние от камеры до target (главного объекта).
-  function applyDollyZoom(shotCam, f1, f2, t, mainObjPos){
-    const f = f1 + (f2 - f1) * t;
-    const camPos = new THREE.Vector3(...shotCam.pos);
-    const target = mainObjPos ? new THREE.Vector3(...mainObjPos) : new THREE.Vector3(...(shotCam.target || [0,1,0]));
-    const dirToTarget = target.clone().sub(camPos);
-    const d1 = dirToTarget.length();
-    const dT = d1 * f / f1;
-    const newPos = target.clone().sub(dirToTarget.clone().normalize().multiplyScalar(dT));
-    shotCam.pos = [newPos.x, newPos.y, newPos.z];
-    shotCam.focalMm = f;
-    return { f, dT };
-  }
-
-  // Рендер кадра в произвольный canvas с сохранением aspect
-  function renderTo(canvas, scene, shotCam, lens, opts = {}){
-    ensure();
-    const w = canvas.width, h = canvas.height;
-    apply(shotCam, lens);
-    const r = SceneManager.three.renderer;
-    const oldSize = r.getSize(new THREE.Vector2());
-    const oldAspect = shotCamera.aspect;
-    // Установим аспект по canvas
-    shotCamera.aspect = w / h;
-    // Если аспект кадра задан явно — используем его, а canvas будет letterbox
-    if(shotCam.aspect){
-      shotCamera.aspect = shotCam.aspect[0] / shotCam.aspect[1];
-    }
-    shotCamera.updateProjectionMatrix();
-
-    r.setSize(w, h, false);
-    r.setViewport(0, 0, w, h);
-    r.setScissorTest(false);
-    if(opts.clearColor !== undefined){
-      const oldBg = scene.background;
-      scene.background = new THREE.Color(opts.clearColor);
-      r.render(scene, shotCamera);
-      scene.background = oldBg;
-    } else {
-      r.render(scene, shotCamera);
-    }
-    // Восстановим размер
-    r.setSize(oldSize.x, oldSize.y, false);
-    shotCamera.aspect = oldAspect;
-    shotCamera.updateProjectionMatrix();
-  }
-
-  return { ensure, apply, changeFocal, applyDollyZoom, renderTo, get camera(){ ensure(); return shotCamera; } };
-})();
-
-/* ============================================================
-   UI
+   Модуль UI — панели, кнопки, свойства, список объектов
    ============================================================ */
 const UI = (() => {
   let el = {};
-  let suppress = false;
-  let viewMode = 'split';       // 'scene' | 'frame' | 'split'
-  let editorView = 'persp';
-  const cmpCanvases = [];
+  let suppressEvents = false;
 
   function init(){
     el = {
@@ -1229,75 +969,13 @@ const UI = (() => {
       colS: document.getElementById('colS'), colSn: document.getElementById('colSn'),
       colV: document.getElementById('colV'), colVn: document.getElementById('colVn'),
       saveState: document.getElementById('saveState'),
-      toast: document.getElementById('toast'),
-      // Camera UI
-      camSensor: document.getElementById('camSensor'),
-      camAspect: document.getElementById('camAspect'),
-      camF: document.getElementById('camF'), camFn: document.getElementById('camFn'),
-      camN: document.getElementById('camN'), camNn: document.getElementById('camNn'),
-      camS: document.getElementById('camS'), camSn: document.getElementById('camSn'),
-      camPresets: document.getElementById('camPresets'),
-      modeA: document.getElementById('modeA'), modeB: document.getElementById('modeB'),
-      camMainObj: document.getElementById('camMainObj'),
-      dollyF1: document.getElementById('dollyF1'), dollyF2: document.getElementById('dollyF2'),
-      dollyT: document.getElementById('dollyT'),
-      infoFovH: document.getElementById('infoFovH'), infoFovV: document.getElementById('infoFovV'),
-      infoFovD: document.getElementById('infoFovD'), infoCrop: document.getElementById('infoCrop'),
-      infoEqF: document.getElementById('infoEqF'), infoWork: document.getElementById('infoWork'),
-      infoH: document.getElementById('infoH'), infoDof: document.getElementById('infoDof'),
-      infoVig: document.getElementById('infoVig'),
-      hudFov: document.getElementById('hudFov'), hudF: document.getElementById('hudF'),
-      hudMode: document.getElementById('hudMode'),
-      btnCompare4: document.getElementById('btnCompare4'),
-      pip: document.getElementById('pip'),
-      pipCanvas: document.getElementById('pipCanvas'),
-      // views
-      viewSingle: document.getElementById('viewSingle'),
-      viewSplit: document.getElementById('viewSplit'),
-      viewFrame: document.getElementById('viewFrame'),
-      viewSplitLeft: document.getElementById('viewSplitLeft'),
-      viewSplitRight: document.getElementById('viewSplitRight'),
-      frameCanvasSingle: document.getElementById('frameCanvasSingle'),
-      frameBox: document.getElementById('frameBox'),
-      frameWrap: document.getElementById('frameWrap'),
-      // модалка
-      cmpModal: document.getElementById('cmpModal'),
-      cmpGrid: document.getElementById('cmpGrid'),
-      cmpClose: document.getElementById('cmpClose')
+      toast: document.getElementById('toast')
     };
 
-    // Заполнить селект сенсоров
-    for(const key of Object.keys(LensModel.SENSORS)){
-      const s = LensModel.SENSORS[key];
-      const o = document.createElement('option');
-      o.value = key; o.textContent = s.name;
-      el.camSensor.appendChild(o);
-    }
-    // Форматы
-    const aspects = [
-      ['16:9', 16, 9], ['2.39:1', 2.39, 1], ['1.85:1', 1.85, 1],
-      ['4:3', 4, 3], ['1:1', 1, 1], ['9:16', 9, 16],
-      ['4:5', 4, 5], ['2:3', 2, 3]
-    ];
-    for(const [name, a, b] of aspects){
-      const o = document.createElement('option');
-      o.value = a + ':' + b; o.textContent = name + '  (' + a + ':' + b + ')';
-      el.camAspect.appendChild(o);
-    }
-
-    // Пресеты объективов
-    const presets = [14, 16, 24, 28, 35, 50, 85, 100, 135, 200, 300];
-    presets.forEach(f => {
-      const b = document.createElement('button');
-      b.className = 'presetBtn';
-      b.textContent = f;
-      b.addEventListener('click', () => setFocal(f, true));
-      el.camPresets.appendChild(b);
+    // Кнопки добавления
+    document.querySelectorAll('[data-add]').forEach(b => {
+      b.addEventListener('click', () => SceneManager.addObject(b.dataset.add));
     });
-
-    // Кнопки добавления объектов
-    document.querySelectorAll('[data-add]').forEach(b =>
-      b.addEventListener('click', () => SceneManager.addObject(b.dataset.add)));
     document.getElementById('btnDelete').addEventListener('click', () => {
       const id = SceneManager.getSelectedId();
       if(id) SceneManager.deleteObject(id);
@@ -1307,34 +985,45 @@ const UI = (() => {
     document.getElementById('btnRedo').addEventListener('click', () => doRedo());
     document.getElementById('btnFit').addEventListener('click', () => SceneManager.fitView());
 
-    document.getElementById('gizmoMove').addEventListener('click', () => SceneManager.setGizmoMode('translate'));
-    document.getElementById('gizmoRot').addEventListener('click', () => SceneManager.setGizmoMode('rotate'));
-    document.getElementById('gizmoScale').addEventListener('click', () => SceneManager.setGizmoMode('scale'));
-    document.querySelectorAll('[data-axis]').forEach(b =>
-      b.addEventListener('click', () => SceneManager.setAxis(b.dataset.axis)));
+    // Гизмо
+    document.getElementById('gizmoMove').addEventListener('click', () => setGizmo('translate'));
+    document.getElementById('gizmoRot').addEventListener('click', () => setGizmo('rotate'));
+    document.getElementById('gizmoScale').addEventListener('click', () => setGizmo('scale'));
 
-    // Виды редактора
-    document.querySelectorAll('[data-edview]').forEach(b => {
-      b.addEventListener('click', () => {
-        document.querySelectorAll('[data-edview]').forEach(x => x.classList.remove('on'));
-        b.classList.add('on');
-        editorView = b.dataset.edview;
-        SceneManager.setEditorViewPreset(editorView);
-      });
+    // Оси
+    document.querySelectorAll('[data-axis]').forEach(b => {
+      b.addEventListener('click', () => setAxis(b.dataset.axis));
     });
 
-    // Вкладки (scene / frame / split / board)
+    // Вкладки (пока только "Сцена 3D" активна)
     document.querySelectorAll('#tabs button').forEach(b => {
       b.addEventListener('click', () => {
         if(b.disabled) return;
         document.querySelectorAll('#tabs button').forEach(x => x.classList.remove('on'));
         b.classList.add('on');
-        viewMode = b.dataset.tab;
-        applyViewMode();
+        toast('Этап 1: доступен только вид «Сцена 3D». Остальные — в след. этапах.');
       });
     });
 
-    // Свойства
+    // Инструменты слева
+    document.querySelectorAll('#tools .t').forEach(t => {
+      t.addEventListener('click', () => {
+        if(t.dataset.add){ SceneManager.addObject(t.dataset.add); return; }
+        if(t.dataset.tool === 'orbit' || t.dataset.tool === 'pan'){
+          toast('Инструмент появится позже. Сейчас: орбита — Alt+ЛКМ или ПКМ-перетаскивание.');
+          return;
+        }
+        document.querySelectorAll('#tools .t').forEach(x => x.classList.remove('on'));
+        t.classList.add('on');
+      });
+    });
+
+    // Меню — заглушки
+    document.querySelectorAll('#menu .m').forEach(m => {
+      m.addEventListener('click', () => toast('Меню «' + m.textContent + '» появится в следующих этапах.'));
+    });
+
+    // Свойства — привязка полей
     bindNum(el.pX, v => mutateTransform('pos', 0, v));
     bindNum(el.pY, v => mutateTransform('pos', 1, v));
     bindNum(el.pZ, v => mutateTransform('pos', 2, v));
@@ -1358,7 +1047,7 @@ const UI = (() => {
     el.pLocked.addEventListener('change', () => {
       const d = SceneManager.getSelectedData(); if(!d) return;
       State.History.tx(() => { d.locked = el.pLocked.checked; });
-      SceneManager.select(d.id);
+      if(d.locked) SceneManager.select(d.id); // переприменить (снимет гизмо)
       State.save();
     });
     el.pAnchor.addEventListener('change', () => {
@@ -1373,74 +1062,19 @@ const UI = (() => {
       State.save();
     });
 
+    // Цвет
     bindColorControls();
 
-    // Camera controls
-    el.camSensor.addEventListener('change', () => {
-      State.History.tx(() => { State.get().shotCam.sensor = el.camSensor.value; });
-      State.save(); refreshCameraUI(); refreshFrame(); refreshPip();
-    });
-    el.camAspect.addEventListener('change', () => {
-      const [a,b] = el.camAspect.value.split(':').map(parseFloat);
-      State.History.tx(() => { State.get().shotCam.aspect = [a,b]; });
-      State.save(); refreshCameraUI(); refreshFrame(); refreshPip();
-    });
-    el.camF.addEventListener('input', () => setFocal(parseFloat(el.camF.value), false));
-    el.camFn.addEventListener('change', () => setFocal(parseFloat(el.camFn.value), false));
-    el.camN.addEventListener('input', () => setAperture(parseFloat(el.camN.value)));
-    el.camNn.addEventListener('change', () => setAperture(parseFloat(el.camNn.value)));
-    el.camS.addEventListener('input', () => setFocusDist(parseFloat(el.camS.value)));
-    el.camSn.addEventListener('change', () => setFocusDist(parseFloat(el.camSn.value)));
-
-    el.modeA.addEventListener('click', () => setLensMode('A'));
-    el.modeB.addEventListener('click', () => setLensMode('B'));
-
-    el.camMainObj.addEventListener('change', () => {
-      State.History.tx(() => { State.get().shotCam.mainObjId = el.camMainObj.value || null; });
-      State.save();
-    });
-
-    el.dollyF1.addEventListener('change', () => {
-      State.History.tx(() => { State.get().shotCam.dollyF1 = parseFloat(el.dollyF1.value) || 35; });
-      State.save();
-    });
-    el.dollyF2.addEventListener('change', () => {
-      State.History.tx(() => { State.get().shotCam.dollyF2 = parseFloat(el.dollyF2.value) || 85; });
-      State.save();
-    });
-    el.dollyT.addEventListener('input', () => {
-      const t = parseFloat(el.dollyT.value);
-      State.History.tx(() => { State.get().shotCam.dollyT = t; });
-      const main = getMainObjPos();
-      const shot = State.get().shotCam;
-      CameraRig.applyDollyZoom(shot, shot.dollyF1, shot.dollyF2, t, main);
-      State.save(); refreshCameraUI(); refreshFrame(); refreshPip();
-    });
-
-    el.btnCompare4.addEventListener('click', openCompare4);
-    el.cmpClose.addEventListener('click', () => { el.cmpModal.style.display = 'none'; });
-
-    // Автосохранение
+    // Автосохранение (по событиям State)
     State.on('saved', () => {
       el.saveState.textContent = 'Сохранено ' + new Date().toLocaleTimeString();
-    });
-    State.on('reloaded', () => {
-      SceneManager.rebuild(); renderObjectList(); renderProps(null);
-      refreshCameraUI(); refreshFrame(); refreshPip();
-      toast('Восстановлено из истории');
     });
 
     // Реакции на изменения сцены
     SceneManager.on('selectionChanged', renderProps);
-    SceneManager.on('transformChanged', d => { if(d && d.id === SceneManager.getSelectedId()) renderPropsValues(d); refreshFrame(); refreshPip(); });
-    SceneManager.on('rebuilt', () => {
-      renderObjectList(); renderProps(SceneManager.getSelectedData());
-      refreshMainObjSelect(); refreshFrame(); refreshPip();
-    });
-    SceneManager.on('rebuiltOne', () => {
-      renderObjectList(); renderProps(SceneManager.getSelectedData());
-      refreshFrame(); refreshPip();
-    });
+    SceneManager.on('transformChanged', d => { if(d && d.id === SceneManager.getSelectedId()) renderPropsValues(d); });
+    SceneManager.on('rebuilt', () => { renderObjectList(); renderProps(SceneManager.getSelectedData()); });
+    SceneManager.on('rebuiltOne', () => { renderObjectList(); renderProps(SceneManager.getSelectedData()); });
     SceneManager.on('gizmoMode', m => {
       document.getElementById('gizmoMove').classList.toggle('on', m==='translate');
       document.getElementById('gizmoRot').classList.toggle('on', m==='rotate');
@@ -1450,13 +1084,21 @@ const UI = (() => {
       document.querySelectorAll('[data-axis]').forEach(b => b.classList.toggle('on', b.dataset.axis === a));
     });
 
-    document.querySelectorAll('.panelSection>h3').forEach(h =>
-      h.addEventListener('click', () => h.parentElement.classList.toggle('collapsed')));
+    // Секции панели — сворачивание
+    document.querySelectorAll('.panelSection>h3').forEach(h => {
+      h.addEventListener('click', () => h.parentElement.classList.toggle('collapsed'));
+    });
 
+    // Горячие клавиши
     window.addEventListener('keydown', onKeyGlobal);
-    window.addEventListener('resize', onResize);
 
-    applyViewMode();
+    // Загрузка проекта
+    State.on('reloaded', () => {
+      SceneManager.rebuild();
+      renderObjectList();
+      renderProps(null);
+      toast('Восстановлено из истории');
+    });
   }
 
   function bindNum(input, cb){
@@ -1465,46 +1107,63 @@ const UI = (() => {
       if(Number.isFinite(v)) cb(v);
     });
   }
-  function mutateTransform(path, idx, value){
-    const d = SceneManager.getSelectedData(); if(!d) return;
-    State.History.tx(() => { d.transform[path][idx] = value; });
-    SceneManager.updateTransformFromData(d); State.save();
+
+  function setGizmo(mode){
+    SceneManager.setGizmoMode(mode);
+  }
+  function setAxis(a){
+    SceneManager.setAxis(a);
   }
 
+  function mutateTransform(path, idx, value){
+    const d = SceneManager.getSelectedData(); if(!d) return;
+    State.History.tx(() => {
+      d.transform[path][idx] = value;
+    });
+    SceneManager.updateTransformFromData(d);
+    State.save();
+  }
+
+  /* ---------- Цвет ---------- */
   function bindColorControls(){
-    const applyRGB = (r,g,b,fromHSV=false) => {
-      const d = SceneManager.getSelectedData(); if(!d || suppress) return;
-      suppress = true;
-      d.color.r = Utils.clamp(Math.round(r),0,255);
-      d.color.g = Utils.clamp(Math.round(g),0,255);
-      d.color.b = Utils.clamp(Math.round(b),0,255);
+    const applyRGB = (r,g,b, fromHSV=false) => {
+      const d = SceneManager.getSelectedData(); if(!d) return;
+      if(suppressEvents) return;
+      suppressEvents = true;
+      d.color.r = Math.max(0, Math.min(255, Math.round(r)));
+      d.color.g = Math.max(0, Math.min(255, Math.round(g)));
+      d.color.b = Math.max(0, Math.min(255, Math.round(b)));
       el.colR.value = el.colRn.value = d.color.r;
       el.colG.value = el.colGn.value = d.color.g;
       el.colB.value = el.colBn.value = d.color.b;
-      el.colHex.value = Utils.rgbToHex(d.color.r,d.color.g,d.color.b);
+      el.colHex.value = Utils.rgbToHex(d.color.r, d.color.g, d.color.b);
       el.colSwatch.style.background = el.colHex.value;
       if(!fromHSV){
-        const hsv = Utils.rgbToHsv(d.color.r,d.color.g,d.color.b);
+        const hsv = Utils.rgbToHsv(d.color.r, d.color.g, d.color.b);
         el.colS.value = el.colSn.value = Math.round(hsv.s*100);
         el.colV.value = el.colVn.value = Math.round(hsv.v*100);
       }
-      SceneManager.updateColorFromData(d); State.save();
-      suppress = false;
+      SceneManager.updateColorFromData(d);
+      State.save();
+      suppressEvents = false;
     };
     const applyHSV = () => {
-      const d = SceneManager.getSelectedData(); if(!d || suppress) return;
-      const hsv = Utils.rgbToHsv(d.color.r,d.color.g,d.color.b);
-      const s = parseFloat(el.colS.value)/100;
-      const v = parseFloat(el.colV.value)/100;
-      const rgb = Utils.hsvToRgb(hsv.h, s, v);
+      const d = SceneManager.getSelectedData(); if(!d) return;
+      if(suppressEvents) return;
+      const hsv = Utils.rgbToHsv(d.color.r, d.color.g, d.color.b);
+      const h = hsv.h;
+      const s = parseFloat(el.colS.value) / 100;
+      const v = parseFloat(el.colV.value) / 100;
+      const rgb = Utils.hsvToRgb(h, s, v);
       applyRGB(rgb.r, rgb.g, rgb.b, true);
     };
-    el.colR.addEventListener('input', () => applyRGB(+el.colR.value,+el.colG.value,+el.colB.value));
-    el.colG.addEventListener('input', () => applyRGB(+el.colR.value,+el.colG.value,+el.colB.value));
-    el.colB.addEventListener('input', () => applyRGB(+el.colR.value,+el.colG.value,+el.colB.value));
-    el.colRn.addEventListener('change', () => applyRGB(+el.colRn.value,+el.colG.value,+el.colB.value));
-    el.colGn.addEventListener('change', () => applyRGB(+el.colR.value,+el.colGn.value,+el.colB.value));
-    el.colBn.addEventListener('change', () => applyRGB(+el.colR.value,+el.colG.value,+el.colBn.value));
+
+    el.colR.addEventListener('input', () => applyRGB(+el.colR.value, +el.colG.value, +el.colB.value));
+    el.colG.addEventListener('input', () => applyRGB(+el.colR.value, +el.colG.value, +el.colB.value));
+    el.colB.addEventListener('input', () => applyRGB(+el.colR.value, +el.colG.value, +el.colB.value));
+    el.colRn.addEventListener('change', () => applyRGB(+el.colRn.value, +el.colG.value, +el.colB.value));
+    el.colGn.addEventListener('change', () => applyRGB(+el.colR.value, +el.colGn.value, +el.colB.value));
+    el.colBn.addEventListener('change', () => applyRGB(+el.colR.value, +el.colG.value, +el.colBn.value));
     el.colS.addEventListener('input', applyHSV);
     el.colV.addEventListener('input', applyHSV);
     el.colSn.addEventListener('change', applyHSV);
@@ -1515,344 +1174,15 @@ const UI = (() => {
     });
   }
 
-  /* ---------- Смена режима вида ---------- */
-  function applyViewMode(){
-    el.viewSingle.style.display = 'none';
-    el.viewSplit.style.display = 'none';
-    el.viewFrame.style.display = 'none';
-    el.pip.classList.remove('on');
-
-    // Сначала отвязываем все ранее прикреплённые канвасы
-    const renderer = SceneManager.three.renderer;
-    const edCanvas = renderer.domElement;
-
-    if(viewMode === 'scene'){
-      el.viewSingle.style.display = 'block';
-      el.viewSingle.appendChild(edCanvas);
-      el.hudMode.textContent = 'Сцена 3D';
-      el.pip.classList.add('on');
-      SceneManager.resize();
-    }
-    else if(viewMode === 'frame'){
-      el.viewFrame.style.display = 'block';
-      el.hudMode.textContent = 'Кадр';
-      // Сцена рендерится в отдельный canvas и в одиночном окне кадра.
-      // Чтобы не плодить renderer, для вида «Кадр» будем рисовать в
-      // одиночный canvas через дополнительный рендер камерой кадра.
-      SceneManager.resize();
-    }
-    else if(viewMode === 'split'){
-      el.viewSplit.style.display = 'block';
-      el.hudMode.textContent = 'Сплит';
-      // Левый пейн — редактор (переиспользуем основной renderer)
-      el.viewSplitLeft.appendChild(edCanvas);
-      SceneManager.resize();
-      // Правый пейн — камера кадра (второй canvas)
-      if(!el.viewSplitRight.querySelector('canvas.frameCanvas')){
-        const c = document.createElement('canvas');
-        c.className = 'frameCanvas';
-        c.style.position = 'absolute';
-        c.style.inset = '0';
-        c.style.width = '100%';
-        c.style.height = '100%';
-        el.viewSplitRight.appendChild(c);
-      }
-    }
-    refreshFrame(); refreshPip(); renderLoop();
-  }
-
-  /* ---------- Рендер кадра (в правый пейн сплита) ---------- */
-  let rafHandle = null;
-  function renderLoop(){
-    if(rafHandle) cancelAnimationFrame(rafHandle);
-    const step = () => {
-      rafHandle = requestAnimationFrame(step);
-      if(viewMode === 'frame' || viewMode === 'split'){
-        // Правый пейн сплита или одиночный кадр
-        const canvas = viewMode === 'split'
-          ? el.viewSplitRight.querySelector('canvas.frameCanvas')
-          : el.frameCanvasSingle;
-        if(canvas) drawFrameTo(canvas);
-      }
-    };
-    step();
-  }
-
-  function drawFrameTo(canvas){
-    const shot = State.get().shotCam;
-    const lens = LensModel.compute({
-      sensor: shot.sensor, aspect: shot.aspect,
-      focalMm: shot.focalMm, aperture: shot.aperture, focusDistM: shot.focusDistM
-    });
-    // Подгоняем размер canvas под контейнер (canvas.clientWidth/Height)
-    const rect = canvas.parentElement.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio, 2);
-    const W = Math.max(2, Math.floor(rect.width * dpr));
-    const H = Math.max(2, Math.floor(rect.height * dpr));
-    if(canvas.width !== W || canvas.height !== H){ canvas.width = W; canvas.height = H; }
-
-    // Letterbox: считаем прямоугольник кадра с нужным аспектом внутри canvas
-    const aspect = shot.aspect[0]/shot.aspect[1];
-    let fw, fh;
-    if(W/H > aspect){ fh = H; fw = fh * aspect; }
-    else { fw = W; fh = fw / aspect; }
-    const fx = (W - fw)/2, fy = (H - fh)/2;
-
-    // Рендер всей сцены камерой кадра в текущий размер canvas
-    // и потом обрезка окна кадра: будем рендерить прямо во весь canvas,
-    // а поверх — маска рамки.
-    const renderer = SceneManager.three.renderer;
-    const oldSize = renderer.getSize(new THREE.Vector2());
-    const oldAspect = CameraRig.camera.aspect;
-    CameraRig.apply(shot, lens);
-    CameraRig.camera.aspect = aspect;
-    CameraRig.camera.updateProjectionMatrix();
-    renderer.setSize(W, H, false);
-    renderer.setScissorTest(true);
-    renderer.setViewport(fx, H - fy - fh, fw, fh);
-    renderer.setScissor(fx, H - fy - fh, fw, fh);
-    // Фон за кадром — почти чёрный
-    const oldBg = SceneManager.three.scene.background;
-    SceneManager.three.scene.background = new THREE.Color(0x000000);
-    renderer.render(SceneManager.three.scene, CameraRig.camera);
-    SceneManager.three.scene.background = oldBg;
-    renderer.setScissorTest(false);
-    renderer.setSize(oldSize.x, oldSize.y, false);
-
-    // Переносим пиксели из рендерера в целевой canvas
-    const src = renderer.domElement;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, W, H);
-    ctx.drawImage(src, 0, 0, src.width, src.height, 0, 0, W, H);
-
-    // Тонкая рамка кадра
-    ctx.strokeStyle = 'rgba(255,255,255,.5)';
-    ctx.lineWidth = 1 * dpr;
-    ctx.strokeRect(fx+0.5, fy+0.5, fw-1, fh-1);
-
-    void oldAspect;
-  }
-
-  function refreshFrame(){
-    // Синхронизируем размер одиночного canvas при виде «Кадр»
-    if(viewMode !== 'frame') return;
-    const c = el.frameCanvasSingle;
-    const rect = c.parentElement.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio, 2);
-    c.width = Math.max(2, Math.floor(rect.width * dpr));
-    c.height = Math.max(2, Math.floor(rect.height * dpr));
-  }
-
-  /* ---------- PiP ---------- */
-  function refreshPip(){
-    const shot = State.get().shotCam;
-    const lens = LensModel.compute({
-      sensor: shot.sensor, aspect: shot.aspect,
-      focalMm: shot.focalMm, aperture: shot.aperture, focusDistM: shot.focusDistM
-    });
-    const c = el.pipCanvas;
-    const W = c.width, H = c.height;
-    const aspect = shot.aspect[0]/shot.aspect[1];
-    let fw, fh;
-    if(W/H > aspect){ fh = H; fw = fh*aspect; } else { fw = W; fh = fw/aspect; }
-    const fx = (W - fw)/2, fy = (H - fh)/2;
-
-    const renderer = SceneManager.three.renderer;
-    const oldSize = renderer.getSize(new THREE.Vector2());
-    CameraRig.apply(shot, lens);
-    CameraRig.camera.aspect = aspect;
-    CameraRig.camera.updateProjectionMatrix();
-    renderer.setSize(W, H, false);
-    renderer.setScissorTest(true);
-    renderer.setViewport(fx, H - fy - fh, fw, fh);
-    renderer.setScissor(fx, H - fy - fh, fw, fh);
-    const oldBg = SceneManager.three.scene.background;
-    SceneManager.three.scene.background = new THREE.Color(0x000000);
-    renderer.render(SceneManager.three.scene, CameraRig.camera);
-    SceneManager.three.scene.background = oldBg;
-    renderer.setScissorTest(false);
-    renderer.setSize(oldSize.x, oldSize.y, false);
-
-    // Копируем в PiP-canvas
-    const ctx = c.getContext('2d');
-    ctx.clearRect(0,0,W,H);
-    ctx.drawImage(renderer.domElement, 0, 0, renderer.domElement.width, renderer.domElement.height, 0, 0, W, H);
-    ctx.strokeStyle = 'rgba(255,255,255,.4)';
-    ctx.strokeRect(fx+0.5, fy+0.5, fw-1, fh-1);
-
-    // Обновляем визуализацию камеры кадра в сцене
-    SceneManager.updateShotCamViz(shot, lens);
-  }
-
-  /* ---------- Сеттеры настроек камеры ---------- */
-  function setFocal(f, fromPreset){
-    const shot = State.get().shotCam;
-    const main = getMainObjPos();
-    State.History.tx(() => {
-      const res = CameraRig.changeFocal(shot, f, shot.lensMode, main);
-      if(res.moved){
-        // Запишем новое расстояние в фокус
-      }
-    });
-    State.save(); refreshCameraUI(); refreshFrame(); refreshPip();
-    if(fromPreset) toast('f = ' + f + ' мм');
-  }
-  function setAperture(n){
-    State.History.tx(() => { State.get().shotCam.aperture = Utils.clamp(n, 0.95, 22); });
-    State.save(); refreshCameraUI();
-  }
-  function setFocusDist(m){
-    State.History.tx(() => { State.get().shotCam.focusDistM = Utils.clamp(m, 0.1, 100); });
-    State.save(); refreshCameraUI();
-  }
-  function setLensMode(m){
-    State.History.tx(() => { State.get().shotCam.lensMode = m; });
-    el.modeA.classList.toggle('on', m === 'A');
-    el.modeB.classList.toggle('on', m === 'B');
-    State.save();
-    toast(m === 'A' ? 'Режим А: камера стоит, меняется FOV' : 'Режим Б: камера едет, объект сохраняет размер');
-  }
-
-  function getMainObjPos(){
-    const project = State.get();
-    const id = project.shotCam.mainObjId;
-    let obj = project.objects.find(o => o.id === id);
-    if(!obj) obj = project.objects.find(o => o.role === 'main');
-    if(!obj) obj = project.objects[0];
-    return obj ? obj.transform.pos.slice() : null;
-  }
-
-  function refreshMainObjSelect(){
-    const project = State.get();
-    const sel = el.camMainObj;
-    sel.innerHTML = '';
-    const opt0 = document.createElement('option');
-    opt0.value = ''; opt0.textContent = '— авто (по роли) —';
-    sel.appendChild(opt0);
-    project.objects.forEach(o => {
-      const opt = document.createElement('option');
-      opt.value = o.id; opt.textContent = o.name + ' [' + o.role + ']';
-      sel.appendChild(opt);
-    });
-    sel.value = project.shotCam.mainObjId || '';
-  }
-
-  /* ---------- Панель камеры ---------- */
-  function refreshCameraUI(){
-    const shot = State.get().shotCam;
-    el.camSensor.value = shot.sensor;
-    el.camAspect.value = shot.aspect[0] + ':' + shot.aspect[1];
-    el.camF.value = shot.focalMm;
-    el.camFn.value = shot.focalMm;
-    el.camN.value = shot.aperture; el.camNn.value = shot.aperture;
-    el.camS.value = shot.focusDistM; el.camSn.value = shot.focusDistM;
-    el.dollyF1.value = shot.dollyF1; el.dollyF2.value = shot.dollyF2;
-    el.dollyT.value = shot.dollyT;
-    el.modeA.classList.toggle('on', shot.lensMode === 'A');
-    el.modeB.classList.toggle('on', shot.lensMode === 'B');
-    refreshMainObjSelect();
-
-    const lens = LensModel.compute({
-      sensor: shot.sensor, aspect: shot.aspect,
-      focalMm: shot.focalMm, aperture: shot.aperture, focusDistM: shot.focusDistM
-    });
-    el.infoFovH.textContent = lens.fovH.toFixed(1) + '°';
-    el.infoFovV.textContent = lens.fovV.toFixed(1) + '°';
-    el.infoFovD.textContent = lens.fovD.toFixed(1) + '°';
-    el.infoCrop.textContent = lens.crop.toFixed(2);
-    el.infoEqF.textContent = lens.eqF.toFixed(1) + ' мм';
-    el.infoWork.textContent = lens.working.w.toFixed(1) + ' × ' + lens.working.h.toFixed(1) + ' мм';
-    el.infoH.textContent = (lens.H/1000).toFixed(2) + ' м';
-    const dn = (lens.Dn/1000), df = (lens.Df === Infinity ? Infinity : lens.Df/1000);
-    el.infoDof.textContent = dn.toFixed(2) + ' м / ' + (df === Infinity ? '∞' : df.toFixed(2) + ' м');
-    el.infoVig.textContent = (lens.vignetteCorner*100).toFixed(1) + '%';
-    el.hudFov.textContent = lens.fovV.toFixed(1);
-    el.hudF.textContent = shot.focalMm.toFixed(1);
-  }
-
-  /* ---------- Режим сравнения 4 объективов ---------- */
-  function openCompare4(){
-    const focalList = [24, 35, 50, 85];
-    el.cmpGrid.innerHTML = '';
-    // Очистим старые
-    while(cmpCanvases.length){ cmpCanvases.pop(); }
-
-    // Сохраним оригинал
-    const shotOrig = JSON.parse(JSON.stringify(State.get().shotCam));
-    const main = getMainObjPos();
-
-    focalList.forEach(f => {
-      const cell = document.createElement('div');
-      cell.style.cssText = 'background:#000;border:1px solid var(--bd);border-radius:6px;padding:6px';
-      const c = document.createElement('canvas');
-      c.width = 640; c.height = 360;
-      c.style.cssText = 'display:block;width:100%;height:auto';
-      const cap = document.createElement('div');
-      cap.style.cssText = 'color:var(--fg2);font-size:12px;margin-top:4px';
-      cap.textContent = f + ' мм';
-      cell.appendChild(c); cell.appendChild(cap);
-      el.cmpGrid.appendChild(cell);
-      cmpCanvases.push({ f, canvas: c });
-    });
-
-    // Считаем d1 — расстояние от камеры до main при f1 = оригинальном
-    // Для каждого f: d = d1 * f / f1; новое положение вдоль луча
-    const camPos = new THREE.Vector3(...shotOrig.pos);
-    const target = main ? new THREE.Vector3(...main) : new THREE.Vector3(...shotOrig.target);
-    const dirToTarget = target.clone().sub(camPos);
-    const d1 = dirToTarget.length();
-    const f1 = shotOrig.focalMm;
-
-    // Рендерим каждую ячейку
-    for(const { f, canvas } of cmpCanvases){
-      const shot = JSON.parse(JSON.stringify(shotOrig));
-      const dNew = d1 * f / f1;
-      const newPos = target.clone().sub(dirToTarget.clone().normalize().multiplyScalar(dNew));
-      shot.pos = [newPos.x, newPos.y, newPos.z];
-      shot.focalMm = f;
-      drawCompareCell(canvas, shot);
-    }
-
-    el.cmpModal.style.display = 'flex';
-  }
-  function drawCompareCell(canvas, shot){
-    const lens = LensModel.compute({
-      sensor: shot.sensor, aspect: shot.aspect,
-      focalMm: shot.focalMm, aperture: shot.aperture, focusDistM: shot.focusDistM
-    });
-    const W = canvas.width, H = canvas.height;
-    const aspect = shot.aspect[0]/shot.aspect[1];
-    let fw, fh;
-    if(W/H > aspect){ fh = H; fw = fh*aspect; } else { fw = W; fh = fw/aspect; }
-    const fx = (W - fw)/2, fy = (H - fh)/2;
-
-    const renderer = SceneManager.three.renderer;
-    const oldSize = renderer.getSize(new THREE.Vector2());
-    CameraRig.apply(shot, lens);
-    CameraRig.camera.aspect = aspect;
-    CameraRig.camera.updateProjectionMatrix();
-    renderer.setSize(W, H, false);
-    renderer.setScissorTest(true);
-    renderer.setViewport(fx, H - fy - fh, fw, fh);
-    renderer.setScissor(fx, H - fy - fh, fw, fh);
-    const oldBg = SceneManager.three.scene.background;
-    SceneManager.three.scene.background = new THREE.Color(0x000000);
-    renderer.render(SceneManager.three.scene, CameraRig.camera);
-    SceneManager.three.scene.background = oldBg;
-    renderer.setScissorTest(false);
-    renderer.setSize(oldSize.x, oldSize.y, false);
-
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0,0,W,H);
-    ctx.drawImage(renderer.domElement, 0, 0, renderer.domElement.width, renderer.domElement.height, 0, 0, W, H);
-    ctx.strokeStyle = 'rgba(255,255,255,.4)';
-    ctx.strokeRect(fx+0.5, fy+0.5, fw-1, fh-1);
-  }
-
-  /* ---------- Свойства/список ---------- */
+  /* ---------- Отрисовка свойств ---------- */
   function renderProps(data){
-    if(!data){ el.propsEmpty.style.display=''; el.propsObj.style.display='none'; return; }
-    el.propsEmpty.style.display='none'; el.propsObj.style.display='';
+    if(!data){
+      el.propsEmpty.style.display = '';
+      el.propsObj.style.display = 'none';
+      return;
+    }
+    el.propsEmpty.style.display = 'none';
+    el.propsObj.style.display = '';
     el.pName.value = data.name;
     el.pRole.value = data.role;
     renderPropsValues(data);
@@ -1862,54 +1192,63 @@ const UI = (() => {
     renderShapeParams(data);
     renderColor(data);
   }
+
   function renderPropsValues(d){
-    const r3 = v => Math.round(v*1000)/1000;
-    el.pX.value = r3(d.transform.pos[0]);
-    el.pY.value = r3(d.transform.pos[1]);
-    el.pZ.value = r3(d.transform.pos[2]);
-    el.pRX.value = r3(d.transform.rotEuler[0]);
-    el.pRY.value = r3(d.transform.rotEuler[1]);
-    el.pRZ.value = r3(d.transform.rotEuler[2]);
-    el.pSX.value = r3(d.transform.scale[0]);
-    el.pSY.value = r3(d.transform.scale[1]);
-    el.pSZ.value = r3(d.transform.scale[2]);
+    el.pX.value = round3(d.transform.pos[0]);
+    el.pY.value = round3(d.transform.pos[1]);
+    el.pZ.value = round3(d.transform.pos[2]);
+    el.pRX.value = round3(d.transform.rotEuler[0]);
+    el.pRY.value = round3(d.transform.rotEuler[1]);
+    el.pRZ.value = round3(d.transform.rotEuler[2]);
+    el.pSX.value = round3(d.transform.scale[0]);
+    el.pSY.value = round3(d.transform.scale[1]);
+    el.pSZ.value = round3(d.transform.scale[2]);
   }
+  function round3(v){ return Math.round(v*1000)/1000; }
+
   function renderShapeParams(d){
-    el.pShapeParams.innerHTML = '';
+    const box = el.pShapeParams;
+    box.innerHTML = '';
     const mk = (label, key, min, max, step) => {
-      const row = document.createElement('div'); row.className = 'row';
+      const row = document.createElement('div');
+      row.className = 'row';
       row.innerHTML = `<label>${label}</label>`;
       const inp = document.createElement('input');
-      inp.type='number'; inp.min=min; inp.max=max; inp.step=step;
+      inp.type = 'number'; inp.min = min; inp.max = max; inp.step = step;
       inp.value = d.params[key] ?? 0;
       inp.addEventListener('change', () => {
-        const v = parseFloat(inp.value); if(!Number.isFinite(v)) return;
-        State.History.tx(() => { d.params[key] = Utils.clamp(v, min, max); });
-        SceneManager.updateParamsFromData(d); State.save();
+        const v = parseFloat(inp.value);
+        if(!Number.isFinite(v)) return;
+        State.History.tx(() => { d.params[key] = Math.max(min, Math.min(max, v)); });
+        SceneManager.updateParamsFromData(d);
+        State.save();
       });
-      row.appendChild(inp); el.pShapeParams.appendChild(row);
+      row.appendChild(inp);
+      box.appendChild(row);
     };
     switch(d.type){
-      case 'point': mk('Диаметр (м)','size',0.005,2,0.01); break;
-      case 'line': mk('Длина (м)','length',0.01,20,0.1); mk('Толщина (м)','thickness',0.001,0.5,0.005); break;
-      case 'rect': mk('Ширина (м)','width',0.01,20,0.1); mk('Высота (м)','height',0.01,20,0.1); mk('Толщина (extrude)','extrude',0,5,0.05); break;
-      case 'circle': mk('Радиус (м)','radius',0.01,10,0.05); mk('Толщина (extrude)','extrude',0,5,0.05); break;
+      case 'point':   mk('Диаметр (м)','size',0.005,2,0.01); break;
+      case 'line':    mk('Длина (м)','length',0.01,20,0.1); mk('Толщина (м)','thickness',0.001,0.5,0.005); break;
+      case 'rect':    mk('Ширина (м)','width',0.01,20,0.1); mk('Высота (м)','height',0.01,20,0.1); mk('Толщина (extrude)','extrude',0,5,0.05); break;
+      case 'circle':  mk('Радиус (м)','radius',0.01,10,0.05); mk('Толщина (extrude)','extrude',0,5,0.05); break;
       case 'polygon': mk('N (3..24)','n',3,24,1); mk('Радиус (м)','radius',0.01,10,0.05); mk('Толщина (extrude)','extrude',0,5,0.05); break;
     }
   }
+
   function renderColor(d){
-    suppress = true;
+    suppressEvents = true;
     el.colR.value = el.colRn.value = d.color.r;
     el.colG.value = el.colGn.value = d.color.g;
     el.colB.value = el.colBn.value = d.color.b;
-    const hsv = Utils.rgbToHsv(d.color.r,d.color.g,d.color.b);
+    const hsv = Utils.rgbToHsv(d.color.r, d.color.g, d.color.b);
     el.colS.value = el.colSn.value = Math.round(hsv.s*100);
     el.colV.value = el.colVn.value = Math.round(hsv.v*100);
-    el.colHex.value = Utils.rgbToHex(d.color.r,d.color.g,d.color.b);
+    el.colHex.value = Utils.rgbToHex(d.color.r, d.color.g, d.color.b);
     el.colSwatch.style.background = el.colHex.value;
-    suppress = false;
+    suppressEvents = false;
   }
 
+  /* ---------- Список объектов ---------- */
   function renderObjectList(){
     const project = State.get();
     el.objCount.textContent = project.objects.length;
@@ -1917,34 +1256,45 @@ const UI = (() => {
     const selId = SceneManager.getSelectedId();
     project.objects.forEach(o => {
       const div = document.createElement('div');
-      div.className = 'objItem' + (o.id===selId?' sel':'');
-      const eye = document.createElement('span'); eye.className='ic';
-      eye.textContent = o.visible === false ? '🚫' : '👁'; eye.title='Видимость';
+      div.className = 'objItem' + (o.id === selId ? ' sel' : '');
+      const eye = document.createElement('span');
+      eye.className = 'ic'; eye.textContent = o.visible === false ? '🚫' : '👁';
+      eye.title = 'Видимость';
       eye.addEventListener('click', e => {
         e.stopPropagation();
         State.History.tx(() => { o.visible = !(o.visible !== false); });
-        SceneManager.updateTransformFromData(o); State.save(); renderObjectList();
+        SceneManager.updateTransformFromData(o);
+        State.save(); renderObjectList();
       });
-      const lock = document.createElement('span'); lock.className='ic';
-      lock.textContent = o.locked ? '🔒' : '🔓'; lock.title='Замок';
+      const lock = document.createElement('span');
+      lock.className = 'ic'; lock.textContent = o.locked ? '🔒' : '🔓';
+      lock.title = 'Замок';
       lock.addEventListener('click', e => {
         e.stopPropagation();
         State.History.tx(() => { o.locked = !o.locked; });
         if(o.id === selId) SceneManager.select(o.id);
         State.save(); renderObjectList();
       });
-      const anchor = document.createElement('span'); anchor.className='ic';
-      anchor.textContent = o.anchor ? '⚓' : '·'; anchor.title='Якорь';
+      const anchor = document.createElement('span');
+      anchor.className = 'ic'; anchor.textContent = o.anchor ? '⚓' : '·';
+      anchor.title = 'Якорь';
       anchor.addEventListener('click', e => {
         e.stopPropagation();
         State.History.tx(() => { o.anchor = !o.anchor; });
         State.save(); renderObjectList();
       });
-      const nm = document.createElement('span'); nm.className='nm';
+      const nm = document.createElement('span');
+      nm.className = 'nm';
       nm.textContent = o.name + ' · ' + o.type;
-      const del = document.createElement('span'); del.className='ic'; del.textContent='✕';
-      del.addEventListener('click', e => { e.stopPropagation(); SceneManager.deleteObject(o.id); });
-      div.append(eye, lock, anchor, nm, del);
+      const del = document.createElement('span');
+      del.className = 'ic'; del.textContent = '✕';
+      del.title = 'Удалить';
+      del.addEventListener('click', e => {
+        e.stopPropagation();
+        SceneManager.deleteObject(o.id);
+      });
+      div.appendChild(eye); div.appendChild(lock); div.appendChild(anchor);
+      div.appendChild(nm); div.appendChild(del);
       div.addEventListener('click', () => SceneManager.select(o.id));
       div.addEventListener('dblclick', () => {
         const name = prompt('Имя объекта', o.name);
@@ -1958,6 +1308,7 @@ const UI = (() => {
     });
   }
 
+  /* ---------- Toast ---------- */
   let toastTimer = null;
   function toast(msg){
     el.toast.textContent = msg;
@@ -1966,6 +1317,7 @@ const UI = (() => {
     toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2200);
   }
 
+  /* ---------- Горячие клавиши ---------- */
   function onKeyGlobal(e){
     if(e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
     const ctrl = e.ctrlKey || e.metaKey;
@@ -1982,70 +1334,28 @@ const UI = (() => {
       else document.body.classList.toggle('hideAll');
     }
   }
-  function onResize(){
-    SceneManager.resize();
-    refreshFrame();
-  }
-  function doUndo(){ if(State.History.undo()) toast('Откат'); else toast('Нечего откатывать'); }
-  function doRedo(){ if(State.History.redo()) toast('Возврат'); else toast('Нечего возвращать'); }
 
-  return { init, toast, renderObjectList, renderProps, refreshCameraUI, refreshFrame, refreshPip,
-           get mainObjPos(){ return getMainObjPos(); } };
+  function doUndo(){
+    if(State.History.undo()) toast('Откат');
+    else toast('Нечего откатывать');
+  }
+  function doRedo(){
+    if(State.History.redo()) toast('Возврат');
+    else toast('Нечего возвращать');
+  }
+
+  return { init, toast, renderObjectList, renderProps };
 })();
 
 /* ============================================================
-   Автотесты оптики (раздел 14 ТЗ)
+   Модули-заготовки для следующих этапов (пустые)
    ============================================================ */
-function runLensTests(){
-  const results = [];
-  function t(name, got, want, tol){
-    const ok = Math.abs(got - want) <= tol;
-    results.push({ name, got, want, ok });
-    return ok;
-  }
-  // FF, таблица 8.2
-  const cases = [
-    [14, 104.3, 81.2, 114.2],
-    [24, 73.7, 53.1, 84.0],
-    [35, 54.4, 37.8, 63.4],
-    [50, 39.6, 27.0, 46.8],
-    [85, 23.9, 16.1, 28.6],
-    [135, 15.2, 10.2, 18.2],
-    [200, 10.3, 6.9, 12.3]
-  ];
-  for(const [f, h, v, d] of cases){
-    const lens = LensModel.compute({
-      sensor:'FF', aspect:[3,2],
-      focalMm:f, aperture:4, focusDistM:3
-    });
-    t('FOVh FF ' + f + 'mm', lens.fovH, h, 0.1);
-    t('FOVv FF ' + f + 'mm', lens.fovV, v, 0.1);
-    t('FOVd FF ' + f + 'mm', lens.fovD, d, 0.1);
-  }
-  // ГРИП FF 85/1.8/3m (раздел 14)
-  {
-    const df = LensModel.dof(85, 1.8, 3000, 'FF');
-    t('ГРИП Dn 85/1.8/3м', df.Dn, 2936, 5);
-    t('ГРИП Df 85/1.8/3м', df.Df, 3067, 5);
-  }
-  // Виньетка FF 24mm: угловой множитель ≈ 0.305
-  {
-    const rDiag = Math.sqrt(36*36 + 24*24) / 2;
-    const I = LensModel.vignetteAt(24, rDiag);
-    t('Виньетка FF 24mm угол', I, 0.305, 0.02);
-  }
-  // Отчёт
-  const passed = results.filter(r => r.ok).length;
-  console.group('%cFrameLab · Тесты оптики', 'color:#4a9eff;font-weight:bold');
-  results.forEach(r => {
-    const c = r.ok ? 'color:#4caf50' : 'color:#f44336';
-    console.log(`%c${r.ok?'✔':'✘'} ${r.name}: получено ${r.got.toFixed(3)}, ожидалось ~${r.want} (доп. ${r.name.includes('FOV')?0.1:5})`,
-      c);
-  });
-  console.log(`%cИтого: ${passed}/${results.length}`, 'color:#4a9eff;font-weight:bold');
-  console.groupEnd();
-  return { passed, total: results.length };
-}
+const CameraRig = { /* Этап 2 */ };
+const LensModel = { /* Этап 2 */ };
+const GridOverlay = { /* Этап 3 */ };
+const Evaluator = { /* Этап 5 */ };
+const Optimizer = { /* Этап 6 */ };
+const Exporter = { /* Этап 4 */ };
 
 /* ============================================================
    Запуск
@@ -2054,10 +1364,12 @@ window.addEventListener('DOMContentLoaded', () => {
   State.load();
   State.History.reset();
 
-  const view = document.getElementById('viewSingle');
+  const view = document.getElementById('view');
   SceneManager.init(view);
   UI.init();
 
+  // Если проектов нет — создадим демонстрационную сцену,
+  // чтобы можно было сразу проверить: выбор, гизмо, цвет, N.
   const project = State.get();
   if(project.objects.length === 0){
     State.History.tx(() => {
@@ -2069,14 +1381,21 @@ window.addEventListener('DOMContentLoaded', () => {
         role:'background', facing:null, locked:false, anchor:false, visible:true
       });
       project.objects.push({
-        id: Utils.uid(), name:'Герой', type:'polygon',
-        params:{ n:3, radius:0.4, extrude:0.15 },
-        transform:{ pos:[0.6, 0.5, -0.2], rotEuler:[0,0,0], scale:[1,1,1] },
+        id: Utils.uid(), name:'Круг', type:'circle',
+        params:{ radius:0.6, extrude:0 },
+        transform:{ pos:[0.8, 0.8, 0], rotEuler:[0,0,0], scale:[1,1,1] },
         color:{ r:250, g:200, b:60 },
+        role:'secondary', facing:null, locked:false, anchor:false, visible:true
+      });
+      project.objects.push({
+        id: Utils.uid(), name:'Треугольник', type:'polygon',
+        params:{ n:3, radius:0.7, extrude:0.15 },
+        transform:{ pos:[0, 0.7, -1.0], rotEuler:[0,0,0], scale:[1,1,1] },
+        color:{ r:80, g:220, b:120 },
         role:'main', facing:null, locked:false, anchor:false, visible:true
       });
       project.objects.push({
-        id: Utils.uid(), name:'Линия-ориентир', type:'line',
+        id: Utils.uid(), name:'Линия', type:'line',
         params:{ length:3, thickness:0.02 },
         transform:{ pos:[0, 0.02, 1.2], rotEuler:[0,0,0], scale:[1,1,1] },
         color:{ r:220, g:80, b:80 },
@@ -2085,10 +1404,6 @@ window.addEventListener('DOMContentLoaded', () => {
     });
     State.save();
   }
-  if(!project.shotCam.mainObjId){
-    const hero = project.objects.find(o => o.role === 'main');
-    if(hero) project.shotCam.mainObjId = hero.id;
-  }
 
   SceneManager.rebuild();
   UI.renderObjectList();
@@ -2096,27 +1411,18 @@ window.addEventListener('DOMContentLoaded', () => {
   SceneManager.setGizmoMode('translate');
   SceneManager.setAxis('none');
   SceneManager.fitView();
-  UI.refreshCameraUI();
 
-  // Прогреваем рендеры
-  requestAnimationFrame(() => {
-    UI.refreshPip();
-    UI.refreshFrame();
-  });
-
-  // Тесты оптики в консоли
-  runLensTests();
-
-  console.log('%cFrameLab — Этап 2 готов', 'color:#4a9eff;font-weight:bold');
+  console.log('%cFrameLab — Этап 1 готов', 'color:#4a9eff;font-weight:bold');
   console.log('Проверьте вручную:');
-  console.log(' 1) Вкладки сверху: Сцена 3D / Кадр / Сплит');
-  console.log(' 2) PiP в правом нижнем углу: миниатюра камеры кадра');
-  console.log(' 3) Фокусное ползунком / кнопками пресетов 14..300');
-  console.log(' 4) Режим А (камера стоит, FOV меняется) и Б (объект сохраняет размер)');
-  console.log(' 5) Долли-зум: ползунок t при f1=35, f2=85');
-  console.log(' 6) Смена сенсора/аспекта — пересчёт FOV и ГРИП в панели');
-  console.log(' 7) «Сравнить 24/35/50/85» — 4 кадра, главный объект одного размера');
+  console.log(' 1) выбрать объект кликом;');
+  console.log(' 2) подвинуть/повернуть/масштабировать гизмо;');
+  console.log(' 3) ограничить ось кнопками X/Y/Z;');
+  console.log(' 4) изменить N у полигона (3..24);');
+  console.log(' 5) изменить цвет (RGB/S/V/HEX);');
+  console.log(' 6) Ctrl+Z / Ctrl+Y;');
+  console.log(' 7) обновить страницу — сцена восстанавливается.');
 });
 </script>
+
 </body>
 </html>
