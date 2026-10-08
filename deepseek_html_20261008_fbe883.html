@@ -962,8 +962,8 @@ const SceneManager = (() => {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     hostEl.appendChild(renderer.domElement);
 
-    // Запрещаем прокрутку родителя при колесе над канвасом
-    renderer.domElement.addEventListener('wheel', e => e.preventDefault(), { passive:false });
+    // Собственный bounded zoom редакторской камеры.
+    renderer.domElement.addEventListener('wheel', onWheelZoom, { passive:false });
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
@@ -979,9 +979,9 @@ const SceneManager = (() => {
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.08;
     orbit.screenSpacePanning = true;
-    orbit.enableZoom = true;
-    orbit.zoomSpeed = 1;
-    // Вращение правой кнопкой, панорама средней, ЛКМ — выделение
+    // Колесо обрабатываем сами: так zoom не может увести editorCamera
+    // в нулевую дистанцию/за clipping plane и не ломает viewport.
+    orbit.enableZoom = false;
     orbit.mouseButtons = {
       LEFT: null,
       MIDDLE: THREE.MOUSE.PAN,
@@ -1070,6 +1070,29 @@ const SceneManager = (() => {
       Utils.rad(sceneRot.rx), Utils.rad(sceneRot.ry), Utils.rad(sceneRot.rz)
     );
     renderer.render(scene, editorCamera);
+  }
+
+  function onWheelZoom(e){
+    e.preventDefault();
+    if(tcontrols?.dragging) return;
+
+    const target = orbit.target;
+    const offset = editorCamera.position.clone().sub(target);
+    let distance = offset.length();
+    if(!Number.isFinite(distance) || distance < 0.05){
+      offset.set(0, 0.001, 1);
+      distance = 1;
+    }
+
+    // Exponential zoom gives predictable behaviour for both mouse wheels
+    // and high-resolution trackpads.
+    const factor = Math.exp(e.deltaY * 0.0012);
+    const next = THREE.MathUtils.clamp(distance * factor, 0.35, 250);
+
+    offset.setLength(next);
+    editorCamera.position.copy(target).add(offset);
+    editorCamera.updateProjectionMatrix();
+    orbit.update();
   }
 
   // WASD-полёт
@@ -1357,6 +1380,20 @@ const SceneManager = (() => {
     editorCamera.position.copy(center).add(new THREE.Vector3(dist, dist*0.7, dist));
     orbit.target.copy(center); orbit.update();
   }
+  function resetView(){
+    // Сбрасывается только отображение редактора, не объекты и не камера кадра.
+    editorCamera.position.set(4, 3, 6);
+    orbit.target.set(0, 1, 0);
+    orbit.update();
+    editorCamera.updateProjectionMatrix();
+
+    // Поворот сцены — это тоже только визуальный режим редактора.
+    sceneRot = { rx:0, ry:0, rz:0 };
+    const p = State.get();
+    if(p) p.sceneRotation = { rx:0, ry:0, rz:0 };
+    emit('sceneRotationChanged', sceneRot);
+  }
+
   function setEditorViewPreset(name){
     const box = new THREE.Box3(); objectMap.forEach(g => box.expandByObject(g));
     const center = box.isEmpty() ? new THREE.Vector3(0,1,0) : box.getCenter(new THREE.Vector3());
@@ -1461,7 +1498,7 @@ const SceneManager = (() => {
     getSelectedData, getSelectedId, getCamGroup, getCamPicker,
     setGizmoMode, getGizmoMode, setAxis, getAxis,
     commitTransform, updateTransformFromData, updateColorFromData,
-    updateParamsFromData, rebuild, rebuildOne, fitView, setEditorViewPreset,
+    updateParamsFromData, rebuild, rebuildOne, fitView, resetView, setEditorViewPreset,
     updateShotCamViz, readCamGroupToShot,
     setSceneRotation, getSceneRotation, applySceneRotationFromState,
     setEditorMode, getEditorMode,
@@ -2577,12 +2614,10 @@ const UI = (() => {
     document.getElementById('edModeScene').addEventListener('click', () => setEditorMode('scene'));
     document.getElementById('edModeFly').addEventListener('click', () => setEditorMode('fly'));
     document.getElementById('btnSceneReset').addEventListener('click', () => {
-      State.History.tx(() => { State.get().sceneRotation = { rx:0, ry:0, rz:0 }; });
-      SceneManager.applySceneRotationFromState();
+      SceneManager.resetView();
       State.save();
       updateSceneRotSliders();
-      scheduleEval();
-      toast('Сцена и вид сброшены');
+      toast('Вид сцены сброшен');
     });
 
     document.querySelectorAll('#tabs button').forEach(b =>
@@ -3741,6 +3776,14 @@ const UI = (() => {
     sel.value = frame.camera.targetObjId || '';
 
     const lens = FrameAdapter.lensOf(frame);
+    // Пирамида/фрустум камеры всегда синхронизирован с текущим кадром:
+    // фокусное, формат, позиция и ориентация сразу видны в 3D-сцене.
+    if(!(SceneManager.isCamSelected && SceneManager.isCamSelected())){
+      SceneManager.updateShotCamViz(
+        FrameAdapter.frameToShot(frame),
+        lens
+      );
+    }
     el.infoFovH.textContent = lens.fovH.toFixed(1) + '°';
     el.infoFovV.textContent = lens.fovV.toFixed(1) + '°';
     el.infoCrop.textContent = lens.crop.toFixed(2);
