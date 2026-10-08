@@ -704,6 +704,22 @@ const State = (() => {
 
       if(rawV5){
         project = JSON.parse(rawV5);
+
+        // If the v5 state was created by a failed/empty migration, but the
+        // older project still contains a real scene, prefer the real scene.
+        if(Array.isArray(project.objects) && project.objects.length === 0 && rawLegacy){
+          const legacy = JSON.parse(rawLegacy);
+          if(Array.isArray(legacy.objects) && legacy.objects.length > 0){
+            project.name = legacy.name || project.name;
+            project.units = legacy.units || project.units;
+            project.objects = legacy.objects;
+
+            const legacyShot = legacy.shotCam || defaultShotCam();
+            const first = defaultFrame('Кадр 1', legacyShot);
+            project.frames = [first];
+            project.currentFrameId = first.id;
+          }
+        }
       }else if(rawLegacy){
         const legacy = JSON.parse(rawLegacy);
         project = defaultProject();
