@@ -1984,6 +1984,23 @@ const GridOverlay = (() => {
       }
       ctx.restore();
     }
+    if(eo.mainBBox){
+      ctx.save();
+      ctx.strokeStyle = '#ff88ff';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeRect(
+        fx + fw * eo.mainBBox.u0,
+        fy + fh * eo.mainBBox.v0,
+        fw * (eo.mainBBox.u1 - eo.mainBBox.u0),
+        fh * (eo.mainBBox.v1 - eo.mainBBox.v0)
+      );
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ff88ff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('главный', fx + fw * eo.mainBBox.u0, fy + fh * eo.mainBBox.v0 - 4);
+      ctx.restore();
+    }
   }
   function drawGoldenSpiral(g, fx, fy, fw, fh){
     setStroke(g);
@@ -2294,6 +2311,7 @@ const Evaluator = (() => {
   // Для демо возьмём центральный bias и веса видимых объектов, плюс
   // детектор ярких пятен на маленькой копии. Здесь не делаем FFT
   // (полноценная FFT — этап 6), а строим композитный saliency-эскиз.
+ 
   function fft1d(r,i,inv=false){
     const n=r.length, power2=(n & (n-1))===0;
     if(!power2){
@@ -2316,8 +2334,91 @@ const Evaluator = (() => {
   function gaussianBlur1D(a,w,h,s){const rad=Math.max(1,Math.ceil(3*s)),k=new Float32Array(rad*2+1);let z=0;for(let q=-rad;q<=rad;q++){k[q+rad]=Math.exp(-q*q/(2*s*s));z+=k[q+rad];}for(let q=0;q<k.length;q++)k[q]/=z;const t=new Float32Array(a.length),o=new Float32Array(a.length);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=0;for(let q=-rad;q<=rad;q++)v+=a[y*w+Math.min(w-1,Math.max(0,x+q))]*k[q+rad];t[y*w+x]=v;}for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=0;for(let q=-rad;q<=rad;q++)v+=t[Math.min(h-1,Math.max(0,y+q))*w+x]*k[q+rad];o[y*w+x]=v;}return o;}
   function spectralResidual(g,w,h){const r=new Float32Array(g),i=new Float32Array(g.length);fft2d(r,i,w,h);const l=new Float32Array(g.length);for(let x=0;x<g.length;x++)l[x]=Math.log(Math.hypot(r[x],i[x])+1e-6);const sm=gaussianBlur1D(l,w,h,3),res=new Float32Array(g.length);for(let x=0;x<g.length;x++){res[x]=l[x]-sm[x];const p=Math.atan2(i[x],r[x]),amp=Math.exp(res[x]);r[x]=amp*Math.cos(p);i[x]=amp*Math.sin(p);}fft2d(r,i,w,h,true);const s=new Float32Array(g.length);for(let x=0;x<g.length;x++)s[x]=r[x]*r[x]+i[x]*i[x];return gaussianBlur1D(s,w,h,2);}
   function renderSaliencyGray(frame,lens,cam,w,h){const r=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});r.setPixelRatio(1);r.setSize(w,h,false);r.setClearColor(0);const root=SceneManager.getRenderInfo().rootGroup;root.updateMatrixWorld(true);r.render(root,cam);const gl=r.getContext(),p=new Uint8Array(w*h*4);gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,p);r.dispose();const g=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const q=((h-1-y)*w+x)*4;g[y*w+x]=.2126*p[q]+.7152*p[q+1]+.0722*p[q+2];}return g;}
-  function buildSaliencySketch(frame,lens,cam,W=64,H=null){if(!H)H=Math.max(2,Math.round(W*frame.aspect[1]/frame.aspect[0]));const sal=spectralResidual(renderSaliencyGray(frame,lens,cam,W,H),W,H),map=new Float32Array(sal.length);let mn=Infinity,mx=-Infinity;for(const v of sal){mn=Math.min(mn,v);mx=Math.max(mx,v);}const rg=Math.max(1e-6,mx-mn);let tw=0,su=0,sv=0;for(let y=0;y<H;y++)for(let x=0;x<W;x++){const q=y*W+x,v=Utils.clamp((sal[q]-mn)/rg,0,1);map[q]=v;tw+=v;su+=x/(W-1)*v;sv+=y/(H-1)*v;}return {map,W,H,centroid:tw?{u:su/tw,v:sv/tw}:{u:.5,v:.5},heatDataForOverlay:map};}
+  // Карта внимания по spectral residual (Hou & Zhang, 2007).
+  // Если доступен рендер кадра — берём его; иначе — эвристика по объектам.
+  function buildSaliencySketch(frame, lens, cam, W=64, H=null){
+    if(!H) H = Math.max(2, Math.round(W * frame.aspect[1] / frame.aspect[0]));
+    // Приводим W,H к степеням двойки (для radix-2 FFT)
+    const W2 = 1 << Math.round(Math.log2(W));
+    const H2 = 1 << Math.round(Math.log2(H));
+    const gray = new Float32Array(W2 * H2);
 
+    // Попытка честного saliency: рендерим кадр в маленький offscreen
+    let gotPixels = false;
+    try{
+      const root = SceneManager.getRenderInfo().rootGroup;
+      if(root){
+        const off = document.createElement('canvas');
+        off.width = W2; off.height = H2;
+        const r = new THREE.WebGLRenderer({ antialias:false, preserveDrawingBuffer:true, alpha:false });
+        r.setSize(W2, H2, false);
+        r.outputColorSpace = THREE.SRGBColorSpace;
+        r.setClearColor(0x000000, 1);
+        r.render(root, cam);
+        const gl = r.getContext();
+        const pixels = new Uint8Array(W2 * H2 * 4);
+        gl.readPixels(0, 0, W2, H2, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        r.dispose();
+        // WebGL origin — левый нижний; переворачиваем по Y.
+        for(let y=0; y<H2; y++){
+          for(let x=0; x<W2; x++){
+            const sy = H2 - 1 - y;
+            const idx = (sy * W2 + x) * 4;
+            const r0 = pixels[idx]/255, g0 = pixels[idx+1]/255, b0 = pixels[idx+2]/255;
+            gray[y*W2 + x] = 0.2126*r0 + 0.7152*g0 + 0.0722*b0;
+          }
+        }
+        gotPixels = true;
+      }
+    }catch(e){ /* fall through to heuristic */ }
+
+    if(!gotPixels){
+      // Эвристика: центр-bias + bbox объектов (для случаев без GPU)
+      for(let y=0;y<H2;y++) for(let x=0;x<W2;x++){
+        const u = x/(W2-1), v = y/(H2-1);
+        const dx = u - 0.5, dy = v - 0.5;
+        gray[y*W2 + x] = 0.5 + 0.5 * Math.exp(-(dx*dx + dy*dy) / (2*0.3*0.3));
+      }
+    }
+
+    const sal = FFT.spectralResidual(gray, W2, H2);
+    // Center-bias: усиливаем центр
+    for(let y=0;y<H2;y++) for(let x=0;x<W2;x++){
+      const u = x/(W2-1), v = y/(H2-1);
+      const dx = u - 0.5, dy = v - 0.5;
+      const bias = 0.6 + 0.4 * Math.exp(-(dx*dx + dy*dy) / (2*0.4*0.4));
+      sal[y*W2 + x] *= bias;
+    }
+
+    // Центроид saliency
+    let su = 0, sv = 0, sw = 0;
+    for(let y=0;y<H2;y++) for(let x=0;x<W2;x++){
+      const w = sal[y*W2 + x];
+      su += (x/(W2-1)) * w;
+      sv += (y/(H2-1)) * w;
+      sw += w;
+    }
+    const centroid = sw > 0 ? { u: su/sw, v: sv/sw } : { u:0.5, v:0.5 };
+
+    // Готовим heatData для оверлея (топ-12 пиков)
+    const peaks = [];
+    for(let y=2; y<H2-2; y+=2) for(let x=2; x<W2-2; x+=2){
+      const v = sal[y*W2 + x];
+      if(v > 0.5){
+        // локальный максимум
+        let isMax = true;
+        for(let dy=-2; dy<=2 && isMax; dy+=2) for(let dx=-2; dx<=2; dx+=2){
+          if(dx===0 && dy===0) continue;
+          if(sal[(y+dy)*W2 + (x+dx)] > v){ isMax = false; break; }
+        }
+        if(isMax) peaks.push({ u: x/(W2-1), v: y/(H2-1), w: v, r: 0.10 + 0.10*v });
+      }
+    }
+    peaks.sort((a,b) => b.w - a.w);
+    const heatDataForOverlay = peaks.slice(0, 12);
+
+    return { map: sal, W: W2, H: H2, centroid, heatDataForOverlay };
+  }
   function s_focus(saliency, mainObjBBox){
     if(!mainObjBBox) return { s: 0.5, why: 'Нет главного объекта' };
     // Доля массы внимания внутри bbox главного объекта
@@ -2335,16 +2436,25 @@ const Evaluator = (() => {
     return { s, frac };
   }
 
+    // S_clarity = 1 - энтропия(saliency) / энтропия(равномерная)
   function s_clarity(saliency){
-    const { map } = saliency;
-    let sum = 0, sumSq = 0, n = map.length;
-    for(let i=0;i<n;i++){ sum += map[i]; sumSq += map[i]*map[i]; }
-    const mean = sum/n;
-    const varv = sumSq/n - mean*mean;
-    // Нормализуем дисперсию
-    const peak = varv / ((mean*mean) + 1e-6); // коэффициент вариации
-    const s = Utils.clamp(peak / 2.0, 0, 1);
-    return { s, peak };
+    const { map, W, H } = saliency;
+    const n = map.length;
+    let sum = 0;
+    for(let i=0;i<n;i++) sum += map[i];
+    if(sum <= 1e-9) return { s: 0.5, entropy: 1, uniform: 1 };
+    // Нормируем в вероятности
+    const p = new Float32Array(n);
+    for(let i=0;i<n;i++) p[i] = map[i] / sum;
+    // Энтропия Шеннона (в битах)
+    let H_ent = 0;
+    for(let i=0;i<n;i++){
+      if(p[i] > 1e-9) H_ent -= p[i] * Math.log2(p[i]);
+    }
+    const uniform = Math.log2(n);
+    const s = Utils.clamp(1 - H_ent / uniform, 0, 1);
+    void W; void H;
+    return { s, entropy: H_ent, uniform };
   }
 
   function s_edges(frame, lens, cam){
@@ -2558,11 +2668,12 @@ const Evaluator = (() => {
     // Оверлеи
     const evalOverlay = {
       thirds: true,
-      heatmapData: saliency && saliency.heatDataForOverlay ? saliency.heatDataForOverlay : null,
+      heatmapData: saliency.heatDataForOverlay || null,
       nearestThird: thirds.nearest ? { u: thirds.nearest[0], v: thirds.nearest[1] } : null,
       edges: edges.touches,
       horizonV: horizon.vH,
-      horizonGood: horizon.sLine > 0.7
+      horizonGood: horizon.sLine > 0.7,
+      mainBBox: mainBBox ? { u0: mainBBox.u0, u1: mainBBox.u1, v0: mainBBox.v0, v1: mainBBox.v1 } : null
     };
 
     return {
@@ -3426,7 +3537,7 @@ const UI = (() => {
     const H = Math.round(W * frame.aspect[1] / frame.aspect[0]);
     const tmp = document.createElement('canvas');
     tmp.width = W; tmp.height = H;
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
     const cam = CameraRig.apply(shot, lens);
@@ -3437,7 +3548,7 @@ const UI = (() => {
     r.setSize(W, H, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.setClearColor(0x000000, 1);
-    r.render(SceneManager.getRenderInfo().rootGroup, cam);
+    r.render(rootGroup, cam);
     const ctx = tmp.getContext('2d');
     ctx.drawImage(r.domElement, 0, 0, W, H);
     r.dispose();
@@ -3469,7 +3580,7 @@ const UI = (() => {
     out.width = totalW; out.height = totalH;
     const octx = out.getContext('2d');
     octx.fillStyle = '#0a0a0a'; octx.fillRect(0, 0, totalW, totalH);
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const r = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
     r.setSize(W, W, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
@@ -3483,7 +3594,7 @@ const UI = (() => {
       const cam = CameraRig.apply(shot, lens);
       r.setSize(W, H, false);
       r.setClearColor(0x000000, 1);
-      r.render(SceneManager.getRenderInfo().rootGroup, cam);
+      r.render(rootGroup, cam);
       octx.drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, x, y, W, H);
       octx.fillStyle = '#e6e6e6'; octx.font = '20px sans-serif';
       octx.fillText(`${i+1}. ${f.name}`, x, y + H + 30);
@@ -3495,7 +3606,7 @@ const UI = (() => {
 
   function exportPDF(){
     const frames = State.get().frames;
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const r = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
     r.setSize(480, 270, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
@@ -3508,7 +3619,7 @@ const UI = (() => {
       const cam = CameraRig.apply(shot, lens);
       r.setSize(W, H, false);
       r.setClearColor(0x000000, 1);
-      r.render(SceneManager.getRenderInfo().rootGroup, cam);
+      r.render(rootGroup, cam);
       const tmp = document.createElement('canvas');
       tmp.width = W; tmp.height = H;
       tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, W, H);
@@ -4389,7 +4500,7 @@ const Thumbs = (() => {
     const w = 320, h = Math.round(w * frame.aspect[1] / frame.aspect[0]);
     const tmp = document.createElement('canvas');
     tmp.width = w; tmp.height = h;
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
     const cam = CameraRig.apply(shot, lens);
@@ -4397,7 +4508,7 @@ const Thumbs = (() => {
     r.setSize(w, h, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.setClearColor(0x000000, 1);
-    r.render(SceneManager.getRenderInfo().rootGroup, cam);
+    r.render(rootGroup, cam);
     tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, w, h);
     r.dispose();
     const url = tmp.toDataURL('image/png');
