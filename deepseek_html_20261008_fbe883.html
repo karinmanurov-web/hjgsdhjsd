@@ -1613,6 +1613,7 @@ const FrameRenderer = (() => {
 
   function resizeToHost(){
     if(!renderer || !hostEl) return;
+    if(hostEl.clientWidth === 0 || hostEl.clientHeight === 0) return;
     const w = Math.max(2, hostEl.clientWidth);
     const h = Math.max(2, hostEl.clientHeight);
     const size = new THREE.Vector2();
@@ -1701,10 +1702,14 @@ const FrameRenderer = (() => {
     renderer.render(rootGroup, cam);
     renderer.setScissorTest(false);
 
+    const gl = renderer.getContext();
+    const pixelW = renderer.domElement.width, pixelH = renderer.domElement.height;
+    const pixels = new Uint8Array(pixelW * pixelH * 4);
+    gl.readPixels(0, 0, pixelW, pixelH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     return {
-      lens,
-      cam,
-      rect: { fx, fy, fw, fh, w, h }
+      lens, cam,
+      rect: { fx: fx * renderer.getPixelRatio(), fy: fy * renderer.getPixelRatio(), fw: fw * renderer.getPixelRatio(), fh: fh * renderer.getPixelRatio(), w: w * renderer.getPixelRatio(), h: h * renderer.getPixelRatio() },
+      pixels, w: pixelW, h: pixelH
     };
   }
 
@@ -2169,65 +2174,12 @@ const Evaluator = (() => {
   // Для демо возьмём центральный bias и веса видимых объектов, плюс
   // детектор ярких пятен на маленькой копии. Здесь не делаем FFT
   // (полноценная FFT — этап 6), а строим композитный saliency-эскиз.
-  function buildSaliencySketch(frame, lens, cam, W=64, H=null){
-    // Небольшая «карта внимания» по проекциям объектов + центр-bias
-    if(!H) H = Math.max(2, Math.round(W * frame.aspect[1] / frame.aspect[0]));
-    const map = new Float32Array(W * H);
-    // центр-bias
-    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-      const u = x/(W-1), v = y/(H-1);
-      const dx = u - 0.5, dy = v - 0.5;
-      map[y*W + x] += 0.2 * Math.exp(-(dx*dx + dy*dy) / (2*0.3*0.3));
-    }
-    // объекты: центр масс + роль
-    const total = { u:0, v:0, w:0 };
-    const project = new THREE.Vector3();
-    const root = SceneManager.getRenderInfo().rootGroup;
-    for(const obj of State.get().objects){
-      const ov = frame.overrides?.[obj.id] || {};
-      const visible = ov.visible !== undefined ? ov.visible : obj.visible;
-      if(visible === false) continue;
-      const eff = { transform: ov.transform ? {...obj.transform, ...ov.transform} : obj.transform,
-                    color: ov.color ? {...obj.color, ...ov.color} : obj.color };
-      const center = new THREE.Vector3(...eff.transform.pos);
-      const size = AnalyzerLite.guessObjectSize(obj);
-      const corners = [
-        [ -size.x/2, -size.y/2, -size.z/2 ], [ size.x/2, -size.y/2, -size.z/2 ],
-        [ -size.x/2,  size.y/2, -size.z/2 ], [ size.x/2,  size.y/2, -size.z/2 ],
-        [ -size.x/2, -size.y/2,  size.z/2 ], [ size.x/2, -size.y/2,  size.z/2 ],
-        [ -size.x/2,  size.y/2,  size.z/2 ], [ size.x/2,  size.y/2,  size.z/2 ]
-      ].map(([dx,dy,dz]) => new THREE.Vector3(center.x+dx, center.y+dy, center.z+dz)
-        .applyMatrix4(root.matrixWorld));
-      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-      for(const c of corners){
-        project.copy(c).project(cam);
-        const u = (project.x + 1)/2;
-        const v = (1 - project.y)/2;
-        if(u < uMin) uMin = u; if(u > uMax) uMax = u;
-        if(v < vMin) vMin = v; if(v > vMax) vMax = v;
-      }
-      const u0 = Math.max(0, uMin), u1 = Math.min(1, uMax);
-      const v0 = Math.max(0, vMin), v1 = Math.min(1, vMax);
-      if(u1 <= u0 || v1 <= v0) continue;
-      const roleW = obj.role === 'main' ? 3.0 : obj.role === 'secondary' ? 2.0 : obj.role === 'background' ? 1.0 : 0.5;
-      const colorW = 1 + 0.4 * (eff.color.r/255) + 0.2 * (eff.color.g/255);
-      const w = roleW * colorW * ((u1-u0)*(v1-v0)) * 20;
-      // Рисуем «пятно» в карте
-      const cu = (u0+u1)/2, cv = (v0+v1)/2;
-      const rx = (u1-u0)/2 + 0.05, ry = (v1-v0)/2 + 0.05;
-      for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-        const u = x/(W-1), v = y/(H-1);
-        const du = (u - cu)/rx, dv = (v - cv)/ry;
-        const dd = du*du + dv*dv;
-        if(dd < 4){
-          map[y*W + x] += w * Math.exp(-dd);
-        }
-      }
-      total.u += cu * w; total.v += cv * w; total.w += w;
-    }
-    const centroid = total.w > 0 ? { u: total.u/total.w, v: total.v/total.w } : { u: 0.5, v: 0.5 };
-    return { map, W, H, centroid };
-  }
+  function fft1d(r,i,inv=false){const n=r.length;for(let x=1,j=0;x<n;x++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;if(x<j){let t=r[x];r[x]=r[j];r[j]=t;t=i[x];i[x]=i[j];i[j]=t;}}for(let l=2;l<=n;l<<=1){const a=(inv?2:-2)*Math.PI/l,cr=Math.cos(a),ci=Math.sin(a);for(let x=0;x<n;x+=l){let wr=1,wi=0;for(let j=0;j<l/2;j++){const ur=r[x+j],ui=i[x+j],vr=r[x+j+l/2]*wr-i[x+j+l/2]*wi,vi=r[x+j+l/2]*wi+i[x+j+l/2]*wr;r[x+j]=ur+vr;i[x+j]=ui+vi;r[x+j+l/2]=ur-vr;i[x+j+l/2]=ui-vi;const nw=wr*cr-wi*ci;wi=wr*ci+wi*cr;wr=nw;}}}if(inv)for(let x=0;x<n;x++){r[x]/=n;i[x]/=n;}}
+  function fft2d(r,i,w,h,inv=false){const a=new Float32Array(w),b=new Float32Array(w);for(let y=0;y<h;y++){for(let x=0;x<w;x++){a[x]=r[y*w+x];b[x]=i[y*w+x];}fft1d(a,b,inv);for(let x=0;x<w;x++){r[y*w+x]=a[x];i[y*w+x]=b[x];}}const c=new Float32Array(h),d=new Float32Array(h);for(let x=0;x<w;x++){for(let y=0;y<h;y++){c[y]=r[y*w+x];d[y]=i[y*w+x];}fft1d(c,d,inv);for(let y=0;y<h;y++){r[y*w+x]=c[y];i[y*w+x]=d[y];}}}
+  function gaussianBlur1D(a,w,h,s){const rad=Math.max(1,Math.ceil(3*s)),k=new Float32Array(rad*2+1);let z=0;for(let q=-rad;q<=rad;q++){k[q+rad]=Math.exp(-q*q/(2*s*s));z+=k[q+rad];}for(let q=0;q<k.length;q++)k[q]/=z;const t=new Float32Array(a.length),o=new Float32Array(a.length);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=0;for(let q=-rad;q<=rad;q++)v+=a[y*w+Math.min(w-1,Math.max(0,x+q))]*k[q+rad];t[y*w+x]=v;}for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=0;for(let q=-rad;q<=rad;q++)v+=t[Math.min(h-1,Math.max(0,y+q))*w+x]*k[q+rad];o[y*w+x]=v;}return o;}
+  function spectralResidual(g,w,h){const r=new Float32Array(g),i=new Float32Array(g.length);fft2d(r,i,w,h);const l=new Float32Array(g.length);for(let x=0;x<g.length;x++)l[x]=Math.log(Math.hypot(r[x],i[x])+1e-6);const sm=gaussianBlur1D(l,w,h,3),res=new Float32Array(g.length);for(let x=0;x<g.length;x++){res[x]=l[x]-sm[x];const p=Math.atan2(i[x],r[x]),amp=Math.exp(res[x]);r[x]=amp*Math.cos(p);i[x]=amp*Math.sin(p);}fft2d(r,i,w,h,true);const s=new Float32Array(g.length);for(let x=0;x<g.length;x++)s[x]=r[x]*r[x]+i[x]*i[x];return gaussianBlur1D(s,w,h,2);}
+  function renderSaliencyGray(frame,lens,cam,w,h){const r=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});r.setPixelRatio(1);r.setSize(w,h,false);r.setClearColor(0);const root=SceneManager.getRenderInfo().rootGroup;root.updateMatrixWorld(true);r.render(root,cam);const gl=r.getContext(),p=new Uint8Array(w*h*4);gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,p);r.dispose();const g=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const q=((h-1-y)*w+x)*4;g[y*w+x]=.2126*p[q]+.7152*p[q+1]+.0722*p[q+2];}return g;}
+  function buildSaliencySketch(frame,lens,cam,W=64,H=null){if(!H)H=Math.max(2,Math.round(W*frame.aspect[1]/frame.aspect[0]));const sal=spectralResidual(renderSaliencyGray(frame,lens,cam,W,H),W,H),map=new Float32Array(sal.length);let mn=Infinity,mx=-Infinity;for(const v of sal){mn=Math.min(mn,v);mx=Math.max(mx,v);}const rg=Math.max(1e-6,mx-mn);let tw=0,su=0,sv=0;for(let y=0;y<H;y++)for(let x=0;x<W;x++){const q=y*W+x,v=Utils.clamp((sal[q]-mn)/rg,0,1);map[q]=v;tw+=v;su+=x/(W-1)*v;sv+=y/(H-1)*v;}return {map,W,H,centroid:tw?{u:su/tw,v:sv/tw}:{u:.5,v:.5},heatDataForOverlay:map};}
 
   function s_focus(saliency, mainObjBBox){
     if(!mainObjBBox) return { s: 0.5, why: 'Нет главного объекта' };
@@ -2428,11 +2380,10 @@ const Evaluator = (() => {
         why: `Доля внимания на главном объекте: ${(focus.frac*100).toFixed(0)}%.`,
         act: focus.s < 0.6 ? 'Усилить контраст или изоляцию главного объекта.' : null
       },
-      { id:'clarity', name:'Ясность фокуса',
-        s: clarity.s,
-        why: `Пиковость карты внимания: ${clarity.peak.toFixed(2)}.`,
-        act: clarity.s < 0.4 ? 'Разгруппировать второстепенные пятна внимания.' : null
-      },
+      { id:'color', name:'Цветовой акцент', s:0.5, why:'Заглушка этапа 6.', act:null },
+      { id:'lead', name:'Ведущие линии', s:0.5, why:'Заглушка этапа 6.', act:null },
+      { id:'simplicity', name:'Простота', s:0.5, why:'Заглушка этапа 6.', act:null },
+      { id:'lines', name:'Линии', s:0.5, why:'Заглушка этапа 6.', act:null },
       { id:'edges', name:'Края и обрезки',
         s: edges.s,
         why: edges.touches.length
@@ -2452,9 +2403,8 @@ const Evaluator = (() => {
     // Веса профилей
     const WEIGHTS = {
       classic: {
-        thirds: 0.22, balance: 0.15, focus: 0.15, clarity: 0.05,
-        edges: 0.10, horizon: 0.10, // остальное — на будущее
-        // Общая сумма должна давать ~0.77; нормируем динамически ниже
+        thirds: 0.22, balance: 0.15, focus: 0.15, edges: 0.10,
+        horizon: 0.10, color: 0.10, lead: 0.08, simplicity: 0.06, lines: 0.04
       },
       free: {}
     };
@@ -2462,7 +2412,7 @@ const Evaluator = (() => {
     // Для "free" — равные веса
     let sumW = 0, sum = 0;
     for(const c of criteria){
-      const cw = (profileName === 'free' || !w[c.id]) ? 1 : w[c.id];
+      const cw = (profileName === 'free') ? 1 : (w[c.id] ?? 0);
       sum += c.s * cw;
       sumW += cw;
     }
@@ -2487,7 +2437,7 @@ const Evaluator = (() => {
     };
   }
 
-  return { evaluate };
+  return { evaluate, _test: { s_thirds_fromPoint, s_balance } };
 })();
 
 /* ============================================================
@@ -3350,7 +3300,7 @@ const UI = (() => {
     r.setSize(W, H, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.setClearColor(0x000000, 1);
-    r.render(scene, cam);
+    r.render(SceneManager.getRenderInfo().rootGroup, cam);
     const ctx = tmp.getContext('2d');
     ctx.drawImage(r.domElement, 0, 0, W, H);
     r.dispose();
@@ -3396,7 +3346,7 @@ const UI = (() => {
       const cam = CameraRig.apply(shot, lens);
       r.setSize(W, H, false);
       r.setClearColor(0x000000, 1);
-      r.render(scene, cam);
+      r.render(SceneManager.getRenderInfo().rootGroup, cam);
       octx.drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, x, y, W, H);
       octx.fillStyle = '#e6e6e6'; octx.font = '20px sans-serif';
       octx.fillText(`${i+1}. ${f.name}`, x, y + H + 30);
@@ -3421,7 +3371,7 @@ const UI = (() => {
       const cam = CameraRig.apply(shot, lens);
       r.setSize(W, H, false);
       r.setClearColor(0x000000, 1);
-      r.render(scene, cam);
+      r.render(SceneManager.getRenderInfo().rootGroup, cam);
       const tmp = document.createElement('canvas');
       tmp.width = W; tmp.height = H;
       tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, W, H);
@@ -3512,36 +3462,23 @@ const UI = (() => {
       overlay.width = W; overlay.height = H;
     }
 
-    // Пост-обработки (Ч/Б, прищур, дальтонизм) — сделаем на копии рендера
-    const vm = State.get().viewMode || 'normal';
-    const cvd = State.get().cvd || 'none';
-    if(vm !== 'normal' || cvd !== 'none'){
-      const canvas = FrameRenderer.get().domElement;
-      const w = canvas.width, h = canvas.height;
-      // Возьмём пиксели прямо из WebGL через промежуточный canvas
-      const tmp = document.createElement('canvas');
-      tmp.width = w; tmp.height = h;
-      tmp.getContext('2d').drawImage(canvas, 0, 0);
-      const ctx = tmp.getContext('2d');
-      applyPostFX(ctx, w, h, vm, cvd);
-      // Копируем результат обратно в буфер отображения
-      const dst = document.createElement('canvas');
-      dst.width = w; dst.height = h;
-      dst.getContext('2d').drawImage(tmp, 0, 0);
-      // Рисуем в рендерер поверх:
-      // Простейший вариант: заменить содержимое через drawImage невозможно,
-      // поэтому просто наложим поверх прозрачный canvas с эффектом.
-      // Здесь делаем проще: пост-обработки не влияют на вывод кадра напрямую,
-      // они применяются в PNG-экспорте. Для визуального просмотра
-      // (Ч/Б, прищур) добавим CSS-фильтр на canvas.
-      const rcanvas = FrameRenderer.get().domElement;
-      if(vm === 'bw') rcanvas.style.filter = 'grayscale(1)';
-      else if(vm === 'squint') rcanvas.style.filter = 'blur(6px)';
-      else if(vm === 'mini') rcanvas.style.filter = 'blur(0px)';
-      else rcanvas.style.filter = '';
-      void ctx; void dst;
-    } else {
-      FrameRenderer.get().domElement.style.filter = '';
+    // Пост-обработка через offscreen canvas.
+    const vm = State.get().viewMode || 'normal', cvd = State.get().cvd || 'none';
+    let postfx = container.querySelector('canvas.postFxLayer');
+    if(!postfx){
+      postfx=document.createElement('canvas'); postfx.className='postFxLayer';
+      postfx.style.position='absolute'; postfx.style.inset='0'; postfx.style.width='100%'; postfx.style.height='100%';
+      postfx.style.pointerEvents='none'; postfx.style.zIndex='1'; container.appendChild(postfx);
+    }
+    const webglCanvas=FrameRenderer.get().domElement;
+    webglCanvas.style.position='absolute'; webglCanvas.style.inset='0'; webglCanvas.style.zIndex='0';
+    if(postfx.width!==info.w||postfx.height!==info.h){postfx.width=info.w;postfx.height=info.h;}
+    const postCtx=postfx.getContext('2d'); postCtx.clearRect(0,0,info.w,info.h);
+    if(info.pixels && (vm!=='normal'||cvd!=='none')){
+      const imgData=new ImageData(new Uint8ClampedArray(info.pixels),info.w,info.h);
+      applyPostFXToImageData(imgData,vm,cvd);
+      const ic=document.createElement('canvas'); ic.width=info.w;ic.height=info.h;ic.getContext('2d').putImageData(imgData,0,0);
+      postCtx.save();postCtx.translate(0,info.h);postCtx.scale(1,-1);postCtx.drawImage(ic,0,0);postCtx.restore();
     }
 
     // Сетки
@@ -3571,38 +3508,12 @@ const UI = (() => {
     );
   }
 
-  function applyPostFX(ctx, W, H, viewModeKey, cvd){
-    const img = ctx.getImageData(0, 0, W, H);
-    const d = img.data;
-    if(viewModeKey === 'bw'){
-      for(let i=0;i<d.length;i+=4){
-        const y = 0.2126*d[i] + 0.7152*d[i+1] + 0.0722*d[i+2];
-        d[i] = d[i+1] = d[i+2] = y;
-      }
-    }
-    if(cvd === 'prot'){
-      for(let i=0;i<d.length;i+=4){
-        const r = d[i], g = d[i+1], b = d[i+2];
-        d[i]   = 0.567*r + 0.433*g;
-        d[i+1] = 0.558*r + 0.442*g;
-        d[i+2] = 0.242*g + 0.758*b;
-      }
-    } else if(cvd === 'deut'){
-      for(let i=0;i<d.length;i+=4){
-        const r = d[i], g = d[i+1], b = d[i+2];
-        d[i]   = 0.625*r + 0.375*g;
-        d[i+1] = 0.700*r + 0.300*g;
-        d[i+2] = 0.300*g + 0.700*b;
-      }
-    } else if(cvd === 'trit'){
-      for(let i=0;i<d.length;i+=4){
-        const r = d[i], g = d[i+1], b = d[i+2];
-        d[i]   = 0.950*r + 0.050*g;
-        d[i+1] = 0.433*g + 0.567*b;
-        d[i+2] = 0.475*g + 0.525*b;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
+  function applyPostFXToImageData(img, viewModeKey, cvd){
+    const d=img.data;
+    if(viewModeKey==='bw')for(let i=0;i<d.length;i+=4){const y=.2126*d[i]+.7152*d[i+1]+.0722*d[i+2];d[i]=d[i+1]=d[i+2]=y;}
+    if(cvd==='prot')for(let i=0;i<d.length;i+=4){const r=d[i],g=d[i+1],b=d[i+2];d[i]=.567*r+.433*g;d[i+1]=.558*r+.442*g;d[i+2]=.242*g+.758*b;}
+    else if(cvd==='deut')for(let i=0;i<d.length;i+=4){const r=d[i],g=d[i+1],b=d[i+2];d[i]=.625*r+.375*g;d[i+1]=.7*r+.3*g;d[i+2]=.3*g+.7*b;}
+    else if(cvd==='trit')for(let i=0;i<d.length;i+=4){const r=d[i],g=d[i+1],b=d[i+2];d[i]=.95*r+.05*g;d[i+1]=.433*g+.567*b;d[i+2]=.475*g+.525*b;}
   }
 
   /* ---------- Панель сеток ---------- */
@@ -4349,7 +4260,7 @@ const Thumbs = (() => {
     r.setSize(w, h, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.setClearColor(0x000000, 1);
-    r.render(scene, cam);
+    r.render(SceneManager.getRenderInfo().rootGroup, cam);
     tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, w, h);
     r.dispose();
     const url = tmp.toDataURL('image/png');
@@ -4400,8 +4311,8 @@ function runTests(){
   }
   // Точка ровно на силовой — S_thirds > 0.95
   {
-    const r = Evaluator.evaluate.__test_thirds ? Evaluator.evaluate.__test_thirds(1/3, 1/3) : null;
-    if(r) t('S_thirds точно на точке', r.s, 1, 0.05);
+    const r = Evaluator._test.s_thirds_fromPoint(1/3, 1/3);
+    t('S_thirds точно на точке', r.s, 1, 0.05);
   }
   // Точка в центре — S_thirds около 0.29
   // (проверим через вычисление функции exp(-d^2/(2σ²)) при d = sqrt((1/3)^2+(1/3)^2) = 0.4714, σ=0.15)
