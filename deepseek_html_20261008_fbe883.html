@@ -448,6 +448,9 @@
           </div>
         </div>
         <div class="row">
+          <button id="btnCamReset" style="flex:1">Сбросить положение камеры</button>
+        </div>
+        <div class="row">
           <label>Цель</label>
           <select id="camTargetSel" style="flex:1"></select>
         </div>
@@ -2517,6 +2520,7 @@ const UI = (() => {
       camTargetSel: document.getElementById('camTargetSel'),
       camModeFree: document.getElementById('camModeFree'),
       camModeLookAt: document.getElementById('camModeLookAt'),
+      btnCamReset: document.getElementById('btnCamReset'),
       // scene rot
       sceneRx: document.getElementById('sceneRx'), sceneRy: document.getElementById('sceneRy'), sceneRz: document.getElementById('sceneRz'),
       sceneRxN: document.getElementById('sceneRxN'), sceneRyN: document.getElementById('sceneRyN'), sceneRzN: document.getElementById('sceneRzN'),
@@ -2689,6 +2693,7 @@ const UI = (() => {
     bindNum(el.camRoll, v => { mutateShotCamRot('roll', v); scheduleEval(); });
     el.camModeFree.addEventListener('click', () => setShotCamMode('free'));
     el.camModeLookAt.addEventListener('click', () => setShotCamMode('lookAt'));
+    el.btnCamReset.addEventListener('click', resetShotCameraPosition);
     document.querySelectorAll('[data-campreset]').forEach(b =>
       b.addEventListener('click', () => { applyShotCamPreset(b.dataset.campreset); scheduleEval(); }));
 
@@ -2924,6 +2929,23 @@ const UI = (() => {
     State.History.tx(() => { frame.camera[field] = value; });
     State.save(); refreshCameraUI();
   }
+  function resetShotCameraPosition(){
+    const frame = State.currentFrame();
+    State.History.tx(() => {
+      frame.camera.pos = [0, 1.6, 5];
+      frame.camera.yaw = 0;
+      frame.camera.pitch = 0;
+      frame.camera.roll = 0;
+      frame.camera.target = [0, 1, 0];
+      frame.camera.mode = 'free';
+      frame.camera.targetObjId = null;
+    });
+    State.save();
+    refreshCameraUI();
+    scheduleEval();
+    toast('Положение камеры сброшено');
+  }
+
   function setShotCamMode(mode){
     const frame = State.currentFrame();
     State.History.tx(() => { frame.camera.mode = mode; });
