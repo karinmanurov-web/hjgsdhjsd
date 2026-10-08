@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FrameLab — Этап 5</title>
+<title>FrameLab — Этап 6</title>
 <style>
   :root{
     --bg:#1e1e1e; --bg2:#252526; --bg3:#2d2d30; --bd:#3f3f46;
@@ -186,6 +186,14 @@
   .pillRow{display:flex;gap:2px;background:#1a1a1a;border:1px solid var(--bd);border-radius:5px;padding:2px}
   .pillRow button{flex:1;border:0;background:transparent;border-radius:3px;padding:4px 6px;font-size:11px}
   .pillRow button.on{background:var(--acc);color:#fff;font-weight:600}
+  .improveBox{background:#202024;border:1px solid var(--bd);border-radius:6px;padding:8px}
+  .improveBox .iaHead{display:flex;justify-content:space-between;gap:6px;align-items:center;font-weight:600}
+  .improveBox .iaGrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+  .improveBox .iaCell{background:#171719;border:1px solid #343438;border-radius:4px;padding:6px}
+  .improveBox .iaScore{font-size:18px;font-weight:700}
+  .improveBox .iaMuted{color:var(--fg2);font-size:11px}
+  .improveBox .iaActions{display:flex;gap:6px;margin-top:7px}
+  .improveBox .iaActions button{flex:1}
 </style>
 </head>
 <body>
@@ -329,12 +337,22 @@
           <label>Профиль</label>
           <select id="evalProfileSel">
             <option value="classic">Классика</option>
+            <option value="dynamic">Динамика</option>
+            <option value="symmetry">Симметрия</option>
+            <option value="minimalism">Минимализм</option>
+            <option value="portrait">Портрет</option>
+            <option value="landscape">Пейзаж</option>
+            <option value="vertical">Вертикальное видео</option>
+            <option value="cinematic">Cinematic Wide</option>
             <option value="free">Свободный</option>
           </select>
         </div>
         <div class="row">
           <button id="btnReeval">Пересчитать</button>
+          <button id="btnImprove" class="on">✦ Улучшить</button>
           <button id="btnEvalAuto" class="on">Авто</button>
+        </div>
+        <div id="improveBox" style="display:none;margin-top:8px"></div>
         </div>
         <div class="hint">Авто = пересчёт через 350 мс после изменений.</div>
         <div id="criteriaList" style="margin-top:8px"></div>
@@ -2686,6 +2704,171 @@ const Evaluator = (() => {
 })();
 
 /* ============================================================
+   EvaluatorV2 — этап 6: расширенные критерии + профили
+   ============================================================ */
+const EvaluatorV2 = (() => {
+  const clamp = (v,a=0,b=1) => Math.max(a,Math.min(b,v));
+  const gauss = (d,s) => Math.exp(-(d*d)/(2*s*s));
+
+  function mainBBox(frame){
+    const lens = FrameAdapter.lensOf(frame);
+    const cam = CameraRig.apply(FrameAdapter.frameToShot(frame), lens);
+    const id = frame.camera?.mainObjId;
+    const objs = State.get().objects || [];
+    let main = id ? objs.find(o=>o.id===id) : null;
+    if(!main) main = objs.find(o=>o.role==='main') || objs.find(o=>o.role==='secondary');
+    if(!main) return null;
+    const ov = frame.overrides?.[main.id] || {};
+    const tr = { ...(main.transform||{}), ...(ov.transform||{}) };
+    const size = AnalyzerLite.guessObjectSize(main);
+    const root = SceneManager.getRenderInfo().rootGroup;
+    const center = new THREE.Vector3(...(tr.pos||[0,0,0]));
+    const corners=[];
+    for(const [sx,sy,sz] of [[-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],[-1,-1,1],[1,-1,1],[-1,1,1],[1,1,1]]){
+      corners.push(new THREE.Vector3(
+        center.x+sx*size.x/2, center.y+sy*size.y/2, center.z+sz*size.z/2
+      ).applyMatrix4(root.matrixWorld).project(cam));
+    }
+    let u0=Infinity,u1=-Infinity,v0=Infinity,v1=-Infinity;
+    for(const p of corners){
+      const u=(p.x+1)/2, v=(1-p.y)/2;
+      u0=Math.min(u0,u); u1=Math.max(u1,u); v0=Math.min(v0,v); v1=Math.max(v1,v);
+    }
+    return {u0,u1,v0,v1,u:(u0+u1)/2,v:(v0+v1)/2,w:u1-u0,h:v1-v0,area:Math.max(0,(u1-u0)*(v1-v0)),main};
+  }
+
+  function visibleObjects(){
+    return (State.get().objects||[]).filter(o=>o.role!=='guide' && o.visible!==false);
+  }
+
+  function colorHarmony(){
+    const objs=visibleObjects();
+    if(objs.length<2) return 0.75;
+    const hues=[];
+    for(const o of objs){
+      const c=o.color||{r:128,g:128,b:128};
+      const mx=Math.max(c.r,c.g,c.b), mn=Math.min(c.r,c.g,c.b), d=mx-mn;
+      if(d<8) continue;
+      let h=0;
+      if(mx===c.r) h=((c.g-c.b)/d)%6;
+      else if(mx===c.g) h=(c.b-c.r)/d+2;
+      else h=(c.r-c.g)/d+4;
+      h=(h/6+1)%1; hues.push(h);
+    }
+    if(hues.length<2) return 0.7;
+    let sum=0;
+    for(let i=0;i<hues.length;i++) for(let j=i+1;j<hues.length;j++){
+      const d=Math.min(Math.abs(hues[i]-hues[j]),1-Math.abs(hues[i]-hues[j]));
+      sum+=d;
+    }
+    const avg=sum/(hues.length*(hues.length-1)/2);
+    return clamp(1-avg/0.5);
+  }
+
+  function evaluate(frame,profileName='classic'){
+    const base=Evaluator.evaluate(frame,'classic');
+    const b=mainBBox(frame);
+    const safeB=b || {u:.5,v:.5,w:.25,h:.25,area:.0625,u0:.375,u1:.625,v0:.375,v1:.625};
+    const cx=safeB.u, cy=safeB.v;
+
+    const goldenPts=[[0.382,0.382],[0.618,0.382],[0.382,0.618],[0.618,0.618]];
+    const golden=Math.max(...goldenPts.map(([u,v])=>gauss(Math.hypot(cx-u,cy-v),0.18)));
+    const diagonal=Math.max(gauss(Math.abs(cy-cx),0.16),gauss(Math.abs(cy-(1-cx)),0.16));
+    const leadSide = cx<0.5 ? 1-cx : cx;
+    const leadRoom=clamp((leadSide-0.20)/0.55);
+    const headroom=gauss(Math.abs(safeB.v0-0.16),0.12);
+    const shotScale=gauss(Math.log(Math.max(0.004,safeB.area)/0.18),0.8);
+    const negative=gauss(Math.log(Math.max(0.004,1-safeB.area)/0.82),0.7);
+    const simplicity=clamp(1-Math.max(0,visibleObjects().length-3)*0.14);
+    const symmetry=gauss(Math.abs(cx-0.5),0.18);
+    const tilt=gauss(Math.abs(frame.camera?.roll||0),5);
+    const color=colorHarmony();
+
+    const extra=[
+      {id:'golden',name:'Золотое сечение',s:golden,why:'Главный объект сравнен с золотыми точками.',act:golden<0.55?'Сместить главный объект ближе к золотой зоне.':null},
+      {id:'diagonal',name:'Диагональная композиция',s:diagonal,why:'Положение главного объекта относительно диагоналей кадра.',act:diagonal<0.5?'Попробовать диагональное размещение или изменить камеру.':null},
+      {id:'lead',name:'Lead room',s:leadRoom,why:'Свободное пространство по направлению кадра: '+(leadSide*100).toFixed(0)+'%.',act:leadRoom<0.55?'Оставить больше пространства перед объектом.':null},
+      {id:'headroom',name:'Headroom',s:headroom,why:'Верхняя граница главного объекта: '+(safeB.v0*100).toFixed(0)+'% кадра.',act:headroom<0.55?'Дать объекту больше воздуха сверху.':null},
+      {id:'color',name:'Цветовая гармония',s:color,why:'Сравнение цветовых оттенков видимых объектов.',act:color<0.55?'Снизить конфликтующие оттенки.':null},
+      {id:'simplicity',name:'Простота',s:simplicity,why:'В кадре '+visibleObjects().length+' видимых объектов.',act:simplicity<0.7?'Убрать второстепенные объекты или упростить кадр.':null},
+      {id:'negative',name:'Негативное пространство',s:negative,why:'Свободная площадь вокруг главного объекта: '+((1-safeB.area)*100).toFixed(0)+'%.',act:negative<0.55?'Увеличить чистое пространство вокруг объекта.':null},
+      {id:'shotScale',name:'Масштаб плана',s:shotScale,why:'Площадь главного объекта ≈ '+(safeB.area*100).toFixed(1)+'% кадра.',act:shotScale<0.55?'Изменить дистанцию или фокусное расстояние.':null},
+      {id:'symmetry',name:'Симметрия',s:symmetry,why:'Отклонение центра объекта от оси: '+Math.abs(cx-0.5).toFixed(2)+'.',act:symmetry<0.55?'Для симметричного варианта выровнять объект по центру.':null},
+      {id:'tilt',name:'Наклон / Dutch angle',s:tilt,why:'Roll камеры: '+(frame.camera?.roll||0).toFixed(1)+'°.',act:tilt<0.55?'Выровнять камеру, если наклон не является приёмом.':null}
+    ];
+
+    const weights={
+      classic:{thirds:.20,balance:.12,focus:.12,edges:.09,horizon:.08,golden:.10,diagonal:.07,lead:.07,headroom:.05,color:.03,simplicity:.03,negative:.02,shotScale:.02,symmetry:0,tilt:0},
+      dynamic:{thirds:.10,balance:.08,focus:.12,edges:.06,horizon:.04,golden:.08,diagonal:.16,lead:.14,headroom:.05,color:.05,simplicity:.03,negative:.04,shotScale:.03,symmetry:0,tilt:.02},
+      symmetry:{thirds:.05,balance:.08,focus:.10,edges:.08,horizon:.08,golden:.05,diagonal:.02,lead:.02,headroom:.05,color:.03,simplicity:.05,negative:.05,shotScale:.04,symmetry:.30,tilt:.10},
+      minimalism:{thirds:.08,balance:.08,focus:.10,edges:.08,horizon:.05,golden:.05,diagonal:.03,lead:.03,headroom:.05,color:.05,simplicity:.20,negative:.15,shotScale:.08,symmetry:.05,tilt:0},
+      portrait:{thirds:.14,balance:.10,focus:.20,edges:.08,horizon:.04,golden:.08,diagonal:.04,lead:.08,headroom:.08,color:.04,simplicity:.04,negative:.03,shotScale:.08,symmetry:.03,tilt:.02},
+      landscape:{thirds:.12,balance:.12,focus:.10,edges:.08,horizon:.16,golden:.08,diagonal:.06,lead:.05,headroom:.03,color:.08,simplicity:.05,negative:.07,shotScale:.03,symmetry:.02,tilt:.03},
+      vertical:{thirds:.15,balance:.10,focus:.15,edges:.08,horizon:.05,golden:.08,diagonal:.08,lead:.08,headroom:.08,color:.05,simplicity:.05,negative:.06,shotScale:.05,symmetry:.02,tilt:0},
+      cinematic:{thirds:.14,balance:.10,focus:.14,edges:.08,horizon:.08,golden:.10,diagonal:.08,lead:.10,headroom:.06,color:.06,simplicity:.04,negative:.06,shotScale:.02,symmetry:0,tilt:.02},
+      free:null
+    };
+    const all=[...base.criteria,...extra];
+    const w=weights[profileName];
+    let total;
+    if(!w) total=all.reduce((a,c)=>a+c.s,0)/all.length;
+    else {
+      let sum=0,sw=0;
+      for(const c of all){const cw=w[c.id]||0;sum+=c.s*cw;sw+=cw;}
+      total=sw?sum/sw:0;
+    }
+    return {profile:profileName,total,criteria:all,base,mainBBox:safeB,timestamp:Date.now()};
+  }
+
+  return {evaluate, profiles:['classic','dynamic','symmetry','minimalism','portrait','landscape','vertical','cinematic','free']};
+})();
+
+/* ============================================================
+   ImproveEngine — этап 6: candidate search, before/after, Apply/Reject
+   ============================================================ */
+const ImproveEngine = (() => {
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  function cloneFrame(f){ return JSON.parse(JSON.stringify(f)); }
+
+  function candidates(frame){
+    const f0=cloneFrame(frame), out=[];
+    const add=(label,mutate,kind)=>{const f=cloneFrame(f0);mutate(f);out.push({label,kind,frame:f});};
+    [-0.35,0.35].forEach(v=>add('Камера X '+(v>0?'+':'')+v.toFixed(2)+' м',f=>f.camera.pos[0]+=v,'camera'));
+    [-0.20,0.20].forEach(v=>add('Камера Y '+(v>0?'+':'')+v.toFixed(2)+' м',f=>f.camera.pos[1]=clamp(f.camera.pos[1]+v,-20,20),'camera'));
+    [-4,4].forEach(v=>add('Yaw '+(v>0?'+':'')+v+'°',f=>f.camera.yaw+=v,'camera'));
+    [-3,3].forEach(v=>add('Pitch '+(v>0?'+':'')+v+'°',f=>f.camera.pitch+=v,'camera'));
+    [-3,3].forEach(v=>add('Roll '+(v>0?'+':'')+v+'°',f=>f.camera.roll=clamp(f.camera.roll+v,-45,45),'camera'));
+    [0.92,1.08].forEach(k=>add('Фокусное ×'+k.toFixed(2),f=>f.lens.focalMm=clamp(f.lens.focalMm*k,14,300),'lens'));
+    return out;
+  }
+
+  function improve(frame,profile){
+    const before=EvaluatorV2.evaluate(frame,profile);
+    const pool=candidates(frame);
+    let best=null;
+    for(const c of pool){
+      const r=EvaluatorV2.evaluate(c.frame,profile);
+      if(!best || r.total>best.result.total) best={...c,result:r};
+    }
+    if(!best || best.result.total<=before.total+0.002) return {changed:false,before,best:null,checked:pool.length};
+    return {changed:true,before,best,checked:pool.length};
+  }
+
+  function apply(result){
+    if(!result?.changed || !result.best) return false;
+    const current=State.currentFrame();
+    State.History.tx(()=>{
+      current.camera=JSON.parse(JSON.stringify(result.best.frame.camera));
+      current.lens=JSON.parse(JSON.stringify(result.best.frame.lens));
+    });
+    State.save();
+    return true;
+  }
+
+  return {improve,apply};
+})();
+
+/* ============================================================
    UI
    ============================================================ */
 const UI = (() => {
@@ -2730,6 +2913,8 @@ const UI = (() => {
       infoCrop: document.getElementById('infoCrop'), infoEqF: document.getElementById('infoEqF'),
       infoWork: document.getElementById('infoWork'), infoH: document.getElementById('infoH'),
       infoDof: document.getElementById('infoDof'),
+      btnImprove: document.getElementById('btnImprove'),
+      improveBox: document.getElementById('improveBox'),
       hudFrame: document.getElementById('hudFrame'),
       hudFov: document.getElementById('hudFov'), hudF: document.getElementById('hudF'),
       hudMode: document.getElementById('hudMode'), edModeLabel: document.getElementById('edModeLabel'),
@@ -3070,6 +3255,40 @@ const UI = (() => {
       el.btnEvalAuto.classList.toggle('on', State.get().evalAuto);
     });
     el.btnEvalAuto.classList.toggle('on', !!State.get().evalAuto);
+
+    el.btnImprove.addEventListener('click', () => {
+      const frame = State.currentFrame();
+      const profile = State.get().evalProfile || 'classic';
+      el.improveBox.style.display='block';
+      el.improveBox.innerHTML='<div class="hint">Поиск лучшего малого изменения…</div>';
+      requestAnimationFrame(() => {
+        try{
+          const result=ImproveEngine.improve(frame,profile);
+          if(!result.changed){
+            el.improveBox.innerHTML='<div class="iaHead"><span>Улучшение не найдено</span><span class="iaMuted">'+result.checked+' вариантов проверено</span></div><div class="iaMuted" style="margin-top:5px">Текущий кадр уже лучше найденных локальных вариантов.</div>';
+            return;
+          }
+          const b=Math.round(result.before.total*100), a=Math.round(result.best.result.total*100);
+          const weak=result.best.result.criteria.find(c=>c.s<0.6);
+          el.improveBox.innerHTML='<div class="iaHead"><span>Было → стало</span><span class="iaMuted">'+escapeHtml(result.best.label)+'</span></div>'+
+            '<div class="iaGrid"><div class="iaCell"><div class="iaMuted">Сейчас</div><div class="iaScore">'+b+'%</div></div>'+
+            '<div class="iaCell"><div class="iaMuted">Предложение</div><div class="iaScore">'+a+'%</div></div></div>'+
+            '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || 'Локальное улучшение композиции.')+'</div>'+
+            '<div class="iaActions"><button id="btnImproveApply" class="on">Применить</button><button id="btnImproveReject">Отклонить</button></div>';
+          document.getElementById('btnImproveApply').onclick=()=>{
+            ImproveEngine.apply(result);
+            el.improveBox.style.display='none';
+            refreshCameraUI();
+            SceneManager.updateShotCamViz(FrameAdapter.frameToShot(State.currentFrame()), FrameAdapter.lensOf(State.currentFrame()));
+            runEvaluationNow();
+          };
+          document.getElementById('btnImproveReject').onclick=()=>{ el.improveBox.style.display='none'; };
+        }catch(e){
+          console.error('Improve failed',e);
+          el.improveBox.innerHTML='<div class="hint">Не удалось построить предложение. Подробности в Console.</div>';
+        }
+      });
+    });
 
     // Заметки
     el.frameNotes.addEventListener('change', () => {
@@ -4241,7 +4460,7 @@ const UI = (() => {
     const frame = State.currentFrame();
     const profile = State.get().evalProfile || 'classic';
     try{
-      const res = Evaluator.evaluate(frame, profile);
+      const res = EvaluatorV2.evaluate(frame, profile);
       lastEval = res;
       renderEval(res);
       el.hudScore.textContent = Math.round(res.total * 100) + '%';
@@ -4254,7 +4473,8 @@ const UI = (() => {
     const total = Math.round(res.total * 100);
     el.evalScore.textContent = total + '%';
     el.evalScore.style.color = total >= 85 ? '#4caf50' : total >= 70 ? '#8bc34a' : total >= 50 ? '#ff9800' : '#f44336';
-    el.evalProfile.textContent = 'профиль: ' + (res.profile === 'classic' ? 'Классика' : 'Свободный');
+    const profileNames={classic:'Классика',dynamic:'Динамика',symmetry:'Симметрия',minimalism:'Минимализм',portrait:'Портрет',landscape:'Пейзаж',vertical:'Вертикальное видео',cinematic:'Cinematic Wide',free:'Свободный'};
+    el.evalProfile.textContent = 'профиль: ' + (profileNames[res.profile] || res.profile);
     const badge = total >= 85 ? 'отлично' : total >= 70 ? 'хорошо' : total >= 50 ? 'есть что улучшить' : 'слабо';
     el.evalBadge.textContent = badge;
     el.evalBadge.style.background = total >= 85 ? '#27ae60' : total >= 70 ? '#4caf50' : total >= 50 ? '#d68910' : '#c0392b';
