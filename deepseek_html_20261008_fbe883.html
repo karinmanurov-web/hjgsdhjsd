@@ -1608,56 +1608,108 @@ const FrameAdapter = {
    ============================================================ */
 const FrameRenderer = (() => {
   let renderer = null;
-  function ensure(hostEl){
-    if(renderer && renderer.domElement.parentElement === hostEl) return renderer;
-    if(renderer){
-      // Переносим существующий canvas в новый контейнер
-      hostEl.appendChild(renderer.domElement);
+  let hostEl = null;
+  let resizeObserver = null;
+
+  function resizeToHost(){
+    if(!renderer || !hostEl) return;
+    const w = Math.max(2, hostEl.clientWidth);
+    const h = Math.max(2, hostEl.clientHeight);
+    const size = new THREE.Vector2();
+    renderer.getSize(size);
+    if(Math.abs(size.x - w) > 0.5 || Math.abs(size.y - h) > 0.5){
+      renderer.setSize(w, h, false);
+    }
+  }
+
+  function observeHost(nextHost){
+    if(resizeObserver) resizeObserver.disconnect();
+    hostEl = nextHost;
+    resizeObserver = new ResizeObserver(() => resizeToHost());
+    resizeObserver.observe(hostEl);
+    resizeToHost();
+  }
+
+  function ensure(host){
+    if(!host) return null;
+    if(renderer && hostEl !== host){
+      host.appendChild(renderer.domElement);
+      observeHost(host);
       return renderer;
     }
-    renderer = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true, alpha:false });
+    if(renderer) {
+      resizeToHost();
+      return renderer;
+    }
+
+    renderer = new THREE.WebGLRenderer({
+      antialias:true,
+      preserveDrawingBuffer:true,
+      alpha:false
+    });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(Math.max(2, hostEl.clientWidth), Math.max(2, hostEl.clientHeight));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x000000, 1);
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
     renderer.domElement.addEventListener('wheel', e => e.preventDefault(), { passive:false });
-    hostEl.appendChild(renderer.domElement);
-
-    const ro = new ResizeObserver(() => {
-      if(!hostEl.clientWidth) return;
-      renderer.setSize(Math.max(2, hostEl.clientWidth), Math.max(2, hostEl.clientHeight));
-    });
-    ro.observe(hostEl);
+    host.appendChild(renderer.domElement);
+    observeHost(host);
     return renderer;
   }
+
   function get(){ return renderer; }
-  // Возвращает { lens, cam, rect } — где rect в пикселях
+
+  // Рендерим именно rootGroup: без редакторской сетки, осей, гизмо и пирамиды камеры.
+  // Viewport/scissor задаются в логических CSS-пикселях, как требует WebGLRenderer.
   function renderFrame(frame){
-    if(!renderer) return null;
-    const scene = SceneManager.getRenderInfo().scene;
+    if(!renderer || !hostEl) return null;
+
+    resizeToHost();
+
+    const info = SceneManager.getRenderInfo();
+    const rootGroup = info.rootGroup;
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
     const cam = CameraRig.apply(shot, lens);
-    const w = renderer.domElement.width, h = renderer.domElement.height;
-    const aspect = frame.aspect[0]/frame.aspect[1];
+
+    rootGroup.updateMatrixWorld(true);
+
+    const size = renderer.getSize(new THREE.Vector2());
+    const w = Math.max(2, size.x);
+    const h = Math.max(2, size.y);
+    const aspect = frame.aspect[0] / frame.aspect[1];
+
     let fw, fh, fx, fy;
-    if(w/h > aspect){ fh = h; fw = fh * aspect; }
-    else { fw = w; fh = fw / aspect; }
-    fx = (w - fw)/2; fy = (h - fh)/2;
+    if(w / h > aspect){
+      fh = h;
+      fw = fh * aspect;
+    } else {
+      fw = w;
+      fh = fw / aspect;
+    }
+    fx = (w - fw) / 2;
+    fy = (h - fh) / 2;
+
+    const viewportY = h - fy - fh;
     renderer.setScissorTest(true);
-    renderer.setViewport(fx, h - fy - fh, fw, fh);
-    renderer.setScissor(fx, h - fy - fh, fw, fh);
+    renderer.setViewport(fx, viewportY, fw, fh);
+    renderer.setScissor(fx, viewportY, fw, fh);
     renderer.setClearColor(0x000000, 1);
     renderer.clear(true, true, true);
-    renderer.render(scene, cam);
+    renderer.render(rootGroup, cam);
     renderer.setScissorTest(false);
-    return { lens, cam, rect: { fx, fy, fw, fh, w, h } };
+
+    return {
+      lens,
+      cam,
+      rect: { fx, fy, fw, fh, w, h }
+    };
   }
+
   return { ensure, get, renderFrame };
 })();
-
 /* ============================================================
    GridOverlay
    ============================================================ */
