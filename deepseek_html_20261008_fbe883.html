@@ -194,6 +194,7 @@
   .improveBox .iaMuted{color:var(--fg2);font-size:11px}
   .improveBox .iaActions{display:flex;gap:6px;margin-top:7px}
   .improveBox .iaActions button{flex:1}
+  #lensCompareCanvas{border:1px solid var(--bd);border-radius:6px}
 </style>
 </head>
 <body>
@@ -497,6 +498,21 @@
           <input type="number" id="camSn" min="0.1" max="100" step="0.05" style="width:64px"></div>
         <div class="hint">Пресеты (мм)</div>
         <div id="camPresets" class="grid4" style="margin-bottom:6px"></div>
+        <div class="row" style="margin-top:6px">
+          <button id="btnLensCompare" style="flex:1">▦ Сравнить 4 фокусных</button>
+        </div>
+        <div class="gridGroup" style="margin-top:8px">Dolly Zoom</div>
+        <div class="hint">Одновременная смена фокусного и дистанции с сохранением размера объекта.</div>
+        <div class="row"><label>f₁ / f₂</label>
+          <input type="number" id="dollyF1" min="4" max="400" step="0.5" style="width:70px">
+          <input type="number" id="dollyF2" min="4" max="400" step="0.5" style="width:70px"></div>
+        <div class="row"><label>Позиция</label>
+          <input type="range" id="dollyT" min="0" max="1" step="0.01" style="flex:1">
+          <span id="dollyTVal" class="hint" style="width:38px">0%</span>
+        </div>
+        <div class="row"><button id="btnDollyApply" style="flex:1">Применить позицию</button><button id="btnDollyReset">Сброс</button></div>
+        <div class="kv">Дистанция до цели: <b id="dollyDist">—</b></div>
+        <div class="kv">Масштаб объекта: <b id="dollyScaleCheck">—</b></div>
         <div class="row">
           <label>Смена f</label>
           <div class="pillRow" style="flex:1">
@@ -607,6 +623,20 @@
       <button id="nfCancel">Отмена</button>
       <button id="nfCreate" class="on">Создать</button>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="lensCompareModal">
+  <div class="modalBox" style="width:min(1100px,95vw)">
+    <div style="display:flex;justify-content:space-between;align-items:center"><h2>Сравнение фокусных</h2><button id="lensCompareClose">Закрыть</button></div>
+    <div class="row" style="margin-bottom:8px"><label>Фокусные</label>
+      <input id="cmpF1" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <input id="cmpF2" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <input id="cmpF3" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <input id="cmpF4" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <button id="cmpRender" class="on">Обновить</button>
+    </div>
+    <canvas id="lensCompareCanvas" style="width:100%;height:min(70vh,650px);display:block;background:#000"></canvas>
   </div>
 </div>
 
@@ -1619,6 +1649,63 @@ const FrameAdapter = {
     });
   }
 };
+
+/* ============================================================
+   DollyZoom
+   ============================================================ */
+const DollyZoom = (() => {
+  function solve(frame,focal){
+    const shot=FrameAdapter.frameToShot(frame), target=new THREE.Vector3(...(shot.target||[0,1,0]));
+    const p0=new THREE.Vector3(...shot.pos), dir=target.clone().sub(p0), d=dir.length(), oldF=shot.focalMm;
+    if(d<1e-6||oldF<=0) return null;
+    const d2=d*focal/oldF, p=target.clone().sub(dir.normalize().multiplyScalar(d2));
+    return {pos:[p.x,p.y,p.z],distance:d2,focal};
+  }
+  function sample(frame,f1,f2,t){
+    const out=JSON.parse(JSON.stringify(frame)); out.lens.focalMm=f1;
+    const solved=solve(out,f2); if(!solved)return null;
+    const p1=new THREE.Vector3(...out.camera.pos), p2=new THREE.Vector3(...solved.pos);
+    const u=Math.max(0,Math.min(1,t)), p=p1.lerp(p2,u);
+    out.camera.pos=[p.x,p.y,p.z]; out.lens.focalMm=f1+(f2-f1)*u;
+    return out;
+  }
+  function endpoints(frame,f1,f2){
+    const out=JSON.parse(JSON.stringify(frame)); out.lens.focalMm=f1;
+    const aD=new THREE.Vector3(...out.camera.pos).distanceTo(new THREE.Vector3(...(out.camera.target||[0,1,0])));
+    const b=solve(out,f2); if(!b)return null;
+    return {a:{distance:aD,focal:f1,pos:out.camera.pos.slice()},b:{distance:b.distance,focal:f2,pos:b.pos},scaleRatio:1};
+  }
+  return {solve,sample,endpoints};
+})();
+
+/* ============================================================
+   LensCompare
+   ============================================================ */
+const LensCompare = (() => {
+  let renderer=null;
+  function render(frame){
+    if(!renderer)return;
+    const c=el.lensCompareCanvas, root=SceneManager.getRenderInfo().rootGroup;
+    const vals=[el.cmpF1,el.cmpF2,el.cmpF3,el.cmpF4].map(x=>Utils.clamp(parseFloat(x.value)||50,4,400));
+    const W=c.width,H=c.height; renderer.setScissorTest(true);renderer.clear(true,true,true);
+    vals.forEach((f,i)=>{
+      const col=i%2,row=Math.floor(i/2),x=Math.floor(col*W/2),y=Math.floor((1-row)*H/2),vw=Math.floor(W/2),vh=Math.floor(H/2);
+      const shot=FrameAdapter.frameToShot(frame);shot.focalMm=f;
+      const lens=LensModel.compute({sensor:frame.sensor,aspect:frame.aspect,focalMm:f,aperture:frame.lens.aperture,focusDistM:frame.lens.focusDistM});
+      const cam=CameraRig.apply(shot,lens);
+      renderer.setViewport(x,y,vw,vh);renderer.setScissor(x,y,vw,vh);renderer.render(root,cam);
+    });
+    renderer.setScissorTest(false);
+  }
+  function open(frame){
+    const c=el.lensCompareCanvas,dpr=Math.min(devicePixelRatio||1,2);
+    const w=Math.max(300,c.clientWidth),h=Math.max(220,c.clientHeight);c.width=w*dpr;c.height=h*dpr;
+    if(renderer)renderer.dispose();
+    renderer=new THREE.WebGLRenderer({canvas:c,antialias:true,preserveDrawingBuffer:true});
+    renderer.setPixelRatio(dpr);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.setClearColor(0x000000,1);render(frame);
+  }
+  return {open,render};
+})();
 
 /* ============================================================
    FrameRenderer — отдельный WebGLRenderer для кадра кадра
@@ -2915,6 +3002,14 @@ const UI = (() => {
       infoDof: document.getElementById('infoDof'),
       btnImprove: document.getElementById('btnImprove'),
       improveBox: document.getElementById('improveBox'),
+      btnLensCompare: document.getElementById('btnLensCompare'),
+      dollyF1: document.getElementById('dollyF1'), dollyF2: document.getElementById('dollyF2'),
+      dollyT: document.getElementById('dollyT'), dollyTVal: document.getElementById('dollyTVal'),
+      dollyDist: document.getElementById('dollyDist'), dollyScaleCheck: document.getElementById('dollyScaleCheck'),
+      btnDollyApply: document.getElementById('btnDollyApply'), btnDollyReset: document.getElementById('btnDollyReset'),
+      lensCompareModal: document.getElementById('lensCompareModal'), lensCompareClose: document.getElementById('lensCompareClose'),
+      lensCompareCanvas: document.getElementById('lensCompareCanvas'),
+      cmpF1: document.getElementById('cmpF1'), cmpF2: document.getElementById('cmpF2'), cmpF3: document.getElementById('cmpF3'), cmpF4: document.getElementById('cmpF4'), cmpRender: document.getElementById('cmpRender'),
       hudFrame: document.getElementById('hudFrame'),
       hudFov: document.getElementById('hudFov'), hudF: document.getElementById('hudF'),
       hudMode: document.getElementById('hudMode'), edModeLabel: document.getElementById('edModeLabel'),
@@ -3146,6 +3241,18 @@ const UI = (() => {
     el.camSn.addEventListener('change', () => setFocusDist(parseFloat(el.camSn.value)));
     el.modeA.addEventListener('click', () => setLensMode('A'));
     el.modeB.addEventListener('click', () => setLensMode('B'));
+    el.dollyF1.addEventListener('change',updateDollyUI); el.dollyF2.addEventListener('change',updateDollyUI); el.dollyT.addEventListener('input',updateDollyUI);
+    el.btnDollyReset.addEventListener('click',()=>{el.dollyF1.value=35;el.dollyF2.value=85;el.dollyT.value=0;updateDollyUI();});
+    el.btnDollyApply.addEventListener('click',()=>{
+      const f=State.currentFrame(),f1=Utils.clamp(+el.dollyF1.value||35,4,400),f2=Utils.clamp(+el.dollyF2.value||85,4,400),t=Utils.clamp(+el.dollyT.value||0,0,1),next=DollyZoom.sample(f,f1,f2,t);if(!next)return;
+      State.History.tx(()=>{f.camera.pos=next.camera.pos;f.lens.focalMm=next.lens.focalMm;f.lens.dollyF1=f1;f.lens.dollyF2=f2;f.lens.dollyT=t;});
+      State.save();refreshCameraUI();SceneManager.updateShotCamViz(FrameAdapter.frameToShot(f),FrameAdapter.lensOf(f));scheduleEval();
+    });
+    el.btnLensCompare.addEventListener('click',()=>{
+      const f=State.currentFrame(),v=f.lens.focalMm;el.cmpF1.value=v;el.cmpF2.value=Math.max(4,v*.7);el.cmpF3.value=Math.min(400,v*1.4);el.cmpF4.value=Math.min(400,v*2);el.lensCompareModal.classList.add('show');requestAnimationFrame(()=>LensCompare.open(f));
+    });
+    el.lensCompareClose.addEventListener('click',()=>el.lensCompareModal.classList.remove('show'));
+    el.cmpRender.addEventListener('click',()=>LensCompare.render(State.currentFrame()));
 
     const sceneRotHandler = () => {
       State.History.tx(() => {
@@ -4234,6 +4341,14 @@ const UI = (() => {
     el.modeB.classList.toggle('on', m === 'B');
     State.save();
   }
+  function updateDollyUI(){
+    const f=State.currentFrame(),f1=Utils.clamp(parseFloat(el.dollyF1.value)||35,4,400),f2=Utils.clamp(parseFloat(el.dollyF2.value)||85,4,400),t=Utils.clamp(parseFloat(el.dollyT.value)||0,0,1);
+    const ep=DollyZoom.endpoints(f,f1,f2), sample=DollyZoom.sample(f,f1,f2,t);
+    el.dollyTVal.textContent=Math.round(t*100)+'%';
+    if(!ep||!sample){el.dollyDist.textContent='—';el.dollyScaleCheck.textContent='—';return;}
+    el.dollyDist.textContent=new THREE.Vector3(...sample.camera.pos).distanceTo(new THREE.Vector3(...sample.camera.target)).toFixed(2)+' м';
+    el.dollyScaleCheck.textContent='100% (теория)';
+  }
   function refreshCameraUI(){
     const frame = State.currentFrame();
     el.camSensor.value = frame.sensor;
@@ -4241,6 +4356,7 @@ const UI = (() => {
     el.camF.value = frame.lens.focalMm; el.camFn.value = frame.lens.focalMm;
     el.camN.value = frame.lens.aperture; el.camNn.value = frame.lens.aperture;
     el.camS.value = frame.lens.focusDistM; el.camSn.value = frame.lens.focusDistM;
+    el.dollyF1.value=frame.lens.dollyF1??35; el.dollyF2.value=frame.lens.dollyF2??85; el.dollyT.value=frame.lens.dollyT??0; updateDollyUI();
     el.camPX.value = frame.camera.pos[0].toFixed(3);
     el.camPY.value = frame.camera.pos[1].toFixed(3);
     el.camPZ.value = frame.camera.pos[2].toFixed(3);
@@ -4802,6 +4918,14 @@ function runTests(){
     t('FOVh '+f, lens.fovH, h, 0.1);
     t('FOVv '+f, lens.fovV, v, 0.1);
     t('FOVd '+f, lens.fovD, d, 0.1);
+  }
+
+  // Dolly Zoom acceptance
+  {
+    const f=State.currentFrame(),ep=DollyZoom.endpoints(f,35,85);
+    ok('Dolly endpoints',!!ep);
+    if(ep)t('Dolly distance ratio',ep.b.distance/ep.a.distance,85/35,0.01);
+    if(ep)t('Dolly scale ratio',ep.scaleRatio,1,0.0001);
   }
 
   // ГРИП
