@@ -2627,10 +2627,6 @@ const Evaluator = (() => {
         why: `Доля внимания на главном объекте: ${(focus.frac*100).toFixed(0)}%.`,
         act: focus.s < 0.6 ? 'Усилить контраст или изоляцию главного объекта.' : null
       },
-      { id:'color', name:'Цветовой акцент', s:0.5, why:'Заглушка этапа 6.', act:null },
-      { id:'lead', name:'Ведущие линии', s:0.5, why:'Заглушка этапа 6.', act:null },
-      { id:'simplicity', name:'Простота', s:0.5, why:'Заглушка этапа 6.', act:null },
-      { id:'lines', name:'Линии', s:0.5, why:'Заглушка этапа 6.', act:null },
       { id:'edges', name:'Края и обрезки',
         s: edges.s,
         why: edges.touches.length
@@ -2649,9 +2645,10 @@ const Evaluator = (() => {
 
     // Веса профилей
     const WEIGHTS = {
+      // Этап 5: только реально реализованные критерии.
+      // Дополнительные критерии этапа 6 не участвуют в этой оценке.
       classic: {
-        thirds: 0.22, balance: 0.15, focus: 0.15, edges: 0.10,
-        horizon: 0.10, color: 0.10, lead: 0.08, simplicity: 0.06, lines: 0.04
+        thirds: 0.30, balance: 0.20, focus: 0.20, edges: 0.15, horizon: 0.15
       },
       free: {}
     };
@@ -4567,10 +4564,14 @@ const Thumbs = (() => {
 function runTests(){
   const results = [];
   function t(name, got, want, tol){
-    const ok = Math.abs(got - want) <= tol;
-    results.push({ name, got, want, ok });
+    const ok = Number.isFinite(got) && Math.abs(got - want) <= tol;
+    results.push({ name, got, want, tol, ok });
   }
-  // FOV FF
+  function ok(name, value){
+    results.push({ name, got: value ? 1 : 0, want: 1, tol: 0, ok: !!value });
+  }
+
+  // FOV FF 3:2
   const cases = [
     [14, 104.3, 81.2, 114.2], [24, 73.7, 53.1, 84.0], [35, 54.4, 37.8, 63.4],
     [50, 39.6, 27.0, 46.8], [85, 23.9, 16.1, 28.6], [135, 15.2, 10.2, 18.2],
@@ -4582,39 +4583,60 @@ function runTests(){
     t('FOVv '+f, lens.fovV, v, 0.1);
     t('FOVd '+f, lens.fovD, d, 0.1);
   }
+
   // ГРИП
   {
     const df = LensModel.dof(85, 1.8, 3000, 'FF');
     t('Dn 85/1.8/3м', df.Dn, 2936, 5);
     t('Df 85/1.8/3м', df.Df, 3067, 5);
+    ok('ГРИП: дальняя граница конечна', Number.isFinite(df.Df));
   }
+
   // Виньетка
   {
     const rDiag = Math.sqrt(36*36 + 24*24) / 2;
     t('Виньетка FF 24mm', LensModel.vignetteAt(24, rDiag), 0.305, 0.02);
   }
-  // Точка ровно на силовой — S_thirds > 0.95
+
+  // Третьи
   {
     const r = Evaluator._test.s_thirds_fromPoint(1/3, 1/3);
     t('S_thirds точно на точке', r.s, 1, 0.05);
+    ok('S_thirds: ближайшая точка определена', Array.isArray(r.nearest) && r.nearest.length === 2);
   }
   {
     const r = Evaluator._test.s_thirds_fromPoint(0.5, 0.5);
     t('S_thirds в центре', r.s, 0.29, 0.02);
   }
-  // Горизонт при pitch=0
+
+  // Базовые evaluator API
   {
-    const v = AnalyzerLite.horizonV({ pitch:0 }, { fovV: 27 });
+    const b = Evaluator._test.s_balance({u:0.5,v:0.5});
+    t('S_balance в центре', b, 1, 0.0001);
+    const f = Evaluator._test.s_focus(0.9);
+    ok('S_focus API работает', Number.isFinite(f.s) && Number.isFinite(f.frac));
+    const cl = Evaluator._test.s_clarity(0.8);
+    ok('S_clarity API работает', Number.isFinite(cl));
+  }
+
+  // Горизонт
+  {
+    const v = AnalyzerLite.horizonV({ pitch:0 }, { fovV:27 });
     t('Горизонт pitch=0', v, 0.5, 0.001);
   }
+
   const passed = results.filter(r => r.ok).length;
+  const summary = { passed, total: results.length, results };
   console.group('%cFrameLab · Тесты (этап 5)', 'color:#4a9eff;font-weight:bold');
   results.forEach(r => {
     const c = r.ok ? 'color:#4caf50' : 'color:#f44336';
-    console.log(`%c${r.ok?'✔':'✘'} ${r.name}: ${r.got.toFixed(3)} ~ ${r.want}`, c);
+    const got = typeof r.got === 'number' ? r.got.toFixed(3) : String(r.got);
+    console.log(`%c${r.ok?'✔':'✘'} ${r.name}: ${got} ~ ${r.want}`, c);
   });
   console.log(`%cИтого: ${passed}/${results.length}`, 'color:#4a9eff;font-weight:bold');
   console.groupEnd();
+  window.__FrameLabStage5Tests = summary;
+  return summary;
 }
 
 /* ============================================================
