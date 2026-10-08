@@ -3778,12 +3778,10 @@ const UI = (() => {
     const lens = FrameAdapter.lensOf(frame);
     // Пирамида/фрустум камеры всегда синхронизирован с текущим кадром:
     // фокусное, формат, позиция и ориентация сразу видны в 3D-сцене.
-    if(!(SceneManager.isCamSelected && SceneManager.isCamSelected())){
-      SceneManager.updateShotCamViz(
-        FrameAdapter.frameToShot(frame),
-        lens
-      );
-    }
+    SceneManager.updateShotCamViz(
+      FrameAdapter.frameToShot(frame),
+      lens
+    );
     el.infoFovH.textContent = lens.fovH.toFixed(1) + '°';
     el.infoFovV.textContent = lens.fovV.toFixed(1) + '°';
     el.infoCrop.textContent = lens.crop.toFixed(2);
