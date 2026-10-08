@@ -2441,6 +2441,21 @@ const Evaluator = (() => {
   function renderSaliencyGray(frame,lens,cam,w,h){const r=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});r.setPixelRatio(1);r.setSize(w,h,false);r.setClearColor(0);const root=SceneManager.getRenderInfo().rootGroup;root.updateMatrixWorld(true);r.render(root,cam);const gl=r.getContext(),p=new Uint8Array(w*h*4);gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,p);r.dispose();const g=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const q=((h-1-y)*w+x)*4;g[y*w+x]=.2126*p[q]+.7152*p[q+1]+.0722*p[q+2];}return g;}
   // Карта внимания по spectral residual (Hou & Zhang, 2007).
   // Если доступен рендер кадра — берём его; иначе — эвристика по объектам.
+  let saliencyRenderer = null;
+  let saliencyCanvas = null;
+
+  function getSaliencyRenderer(W, H){
+    if(!saliencyCanvas){
+      saliencyCanvas = document.createElement('canvas');
+      saliencyRenderer = new THREE.WebGLRenderer({ antialias:false, preserveDrawingBuffer:true, alpha:false, canvas:saliencyCanvas });
+      saliencyRenderer.setPixelRatio(1);
+      saliencyRenderer.outputColorSpace = THREE.SRGBColorSpace;
+      saliencyRenderer.setClearColor(0x000000, 1);
+    }
+    saliencyRenderer.setSize(W, H, false);
+    return saliencyRenderer;
+  }
+
   function buildSaliencySketch(frame, lens, cam, W=64, H=null){
     if(!H) H = Math.max(2, Math.round(W * frame.aspect[1] / frame.aspect[0]));
     // Приводим W,H к степеням двойки (для radix-2 FFT)
@@ -2453,17 +2468,14 @@ const Evaluator = (() => {
     try{
       const root = SceneManager.getRenderInfo().rootGroup;
       if(root){
-        const off = document.createElement('canvas');
-        off.width = W2; off.height = H2;
-        const r = new THREE.WebGLRenderer({ antialias:false, preserveDrawingBuffer:true, alpha:false });
-        r.setSize(W2, H2, false);
-        r.outputColorSpace = THREE.SRGBColorSpace;
-        r.setClearColor(0x000000, 1);
+        const r = getSaliencyRenderer(W2, H2);
         r.render(root, cam);
         const gl = r.getContext();
         const pixels = new Uint8Array(W2 * H2 * 4);
         gl.readPixels(0, 0, W2, H2, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-        r.dispose();
+        // Один переиспользуемый WebGL-контекст: не создаём/уничтожаем renderer
+        // для каждого кандидата автоулучшения — иначе браузер может потерять
+        // WebGL-контекст и дать белый экран после нескольких проверок.
         // WebGL origin — левый нижний; переворачиваем по Y.
         for(let y=0; y<H2; y++){
           for(let x=0; x<W2; x++){
