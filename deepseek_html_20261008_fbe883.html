@@ -4889,6 +4889,21 @@ const Board = (() => {
   const spacing = 40;
   const positions = new Map();
   let raf = null;
+  function boardData(){
+    const project = State.get();
+    if(!project.boardLayout || typeof project.boardLayout !== 'object'){
+      project.boardLayout = { positions:{}, arrows:[] };
+    }
+    if(!project.boardLayout.positions) project.boardLayout.positions = {};
+    if(!Array.isArray(project.boardLayout.arrows)) project.boardLayout.arrows = [];
+    return project.boardLayout;
+  }
+  function saveLayout(){
+    const data = boardData();
+    data.positions = Object.fromEntries([...positions.entries()].map(([id,p]) => [id,{x:p.x,y:p.y,w:p.w,h:p.h}]));
+    data.arrows = arrows.map(a => ({from:a.from,to:a.to}));
+    State.save();
+  }
   function init(){
     canvas = document.getElementById('boardCanvas');
     layer = document.getElementById('boardLayer');
@@ -4926,12 +4941,16 @@ const Board = (() => {
   function layout(){
     positions.clear();
     const frames = State.get().frames;
+    const data = boardData();
+    const validIds = new Set(frames.map(f => f.id));
+    arrows = data.arrows.filter(a => validIds.has(a.from) && validIds.has(a.to));
     frames.forEach((f, i) => {
       const col = i % 3, row = Math.floor(i / 3);
       const w = thumbSize.w, h = w * (f.aspect[1] / f.aspect[0]);
-      const x = col * (w + spacing) + spacing;
-      const y = row * (h + spacing + 30) + spacing;
-      positions.set(f.id, { x, y, w, h });
+      const fallback = { x:col * (w + spacing) + spacing, y:row * (h + spacing + 30) + spacing, w, h };
+      const saved = data.positions[f.id];
+      positions.set(f.id, saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)
+        ? { x:saved.x, y:saved.y, w, h } : fallback);
     });
   }
   function draw(){
@@ -5024,10 +5043,16 @@ const Board = (() => {
       const rect = wrap.getBoundingClientRect();
       const w = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       const id2 = hitFrame(w.x, w.y);
-      if(id2 && id2 !== arrowStart.frameId) arrows.push({ from: arrowStart.frameId, to: id2 });
+      if(id2 && id2 !== arrowStart.frameId) {
+        arrows.push({ from: arrowStart.frameId, to: id2 });
+        saveLayout();
+      }
       arrowStart = null;
+      Board.redraw();
     }
+    if(dragging?.mode === 'move') saveLayout();
     dragging = null;
+    if(!arrowStart) Board.redraw();
   }
   function onWheel(e){
     e.preventDefault();
