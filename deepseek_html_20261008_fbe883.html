@@ -3908,6 +3908,37 @@ const UI = (() => {
     }[c]));
   }
 
+  function validateImportedProject(data){
+    const fail = message => { throw new Error(message); };
+    if(!data || typeof data !== 'object' || Array.isArray(data)) fail('Файл должен содержать объект проекта');
+    if(!Array.isArray(data.objects)) fail('Нет списка объектов сцены');
+    if(!Array.isArray(data.frames) || data.frames.length === 0) fail('В проекте нет кадров');
+    const ids = new Set();
+    for(let i=0;i<data.frames.length;i++){
+      const f = data.frames[i];
+      if(!f || typeof f !== 'object') fail('Кадр №' + (i+1) + ' повреждён');
+      if(typeof f.id !== 'string' || !f.id) fail('У кадра №' + (i+1) + ' нет ID');
+      if(ids.has(f.id)) fail('Повторяется ID кадра: ' + f.id);
+      ids.add(f.id);
+      if(!f.camera || typeof f.camera !== 'object' || !f.lens || typeof f.lens !== 'object')
+        fail('У кадра «' + (f.name || (i+1)) + '» нет данных камеры или объектива');
+      if(!Array.isArray(f.aspect) || f.aspect.length < 2 ||
+         !Number.isFinite(Number(f.aspect[0])) || !Number.isFinite(Number(f.aspect[1])) ||
+         Number(f.aspect[0]) <= 0 || Number(f.aspect[1]) <= 0)
+        fail('Некорректный формат кадра «' + (f.name || (i+1)) + '»');
+    }
+    if(data.currentFrameId != null && !ids.has(data.currentFrameId))
+      data.currentFrameId = data.frames[0].id;
+    if(!data.currentFrameId) data.currentFrameId = data.frames[0].id;
+    if(!data.boardLayout || typeof data.boardLayout !== 'object') data.boardLayout = { positions:{}, arrows:[] };
+    if(!data.boardLayout.positions || typeof data.boardLayout.positions !== 'object') data.boardLayout.positions = {};
+    if(!Array.isArray(data.boardLayout.arrows)) data.boardLayout.arrows = [];
+    data.boardLayout.arrows = data.boardLayout.arrows.filter(a =>
+      a && ids.has(a.from) && ids.has(a.to) && a.from !== a.to
+    );
+    return data;
+  }
+
   function openMenu(which){
     if(which === 'eval'){
       runEvaluationNow();
@@ -3924,10 +3955,14 @@ const UI = (() => {
           const reader = new FileReader();
           reader.onload = () => {
             try{
-              const parsed = JSON.parse(reader.result);
+              if(file.size > 50 * 1024 * 1024) throw new Error('Файл больше 50 МБ');
+              const parsed = validateImportedProject(JSON.parse(reader.result));
               State.History.tx(() => { Object.assign(State.get(), parsed); });
               State.save(); onProjectReload(); toast('Проект загружен');
-            }catch(e){ toast('Ошибка импорта'); }
+            }catch(e){
+              console.warn('FrameLab: import rejected', e);
+              toast('Импорт отменён: ' + (e.message || 'неверный формат файла'));
+            }
           };
           reader.readAsText(file);
         });
