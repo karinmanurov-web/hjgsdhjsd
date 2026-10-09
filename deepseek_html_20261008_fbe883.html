@@ -3957,7 +3957,27 @@ const UI = (() => {
             try{
               if(file.size > 50 * 1024 * 1024) throw new Error('Файл больше 50 МБ');
               const parsed = validateImportedProject(JSON.parse(reader.result));
-              State.History.tx(() => { Object.assign(State.get(), parsed); });
+              State.History.tx(() => {
+                const target = State.get();
+                for(const key of Object.keys(target)){
+                  if(!Object.prototype.hasOwnProperty.call(parsed, key)) delete target[key];
+                }
+                Object.assign(target, parsed);
+                target.version = Number(target.version) || 5;
+                target.name = String(target.name || 'Untitled');
+                target.units = target.units || 'm';
+                target.settings = { profile:'classic', language:'ru', theme:'dark', ...(target.settings || {}) };
+                target.guides = Array.isArray(target.guides) ? target.guides : [];
+                target.sceneRotation = { rx:0, ry:0, rz:0, ...(target.sceneRotation || {}) };
+                const defaultGrids = State.defaultGrids();
+                target.grids = Object.fromEntries(Object.keys(defaultGrids).map(key => [
+                  key, { ...defaultGrids[key], ...((target.grids && target.grids[key]) || {}) }
+                ]));
+                target.boardLayout = {
+                  positions: target.boardLayout.positions || {},
+                  arrows: target.boardLayout.arrows || []
+                };
+              });
               State.save(); onProjectReload(); toast('Проект загружен');
             }catch(e){
               console.warn('FrameLab: import rejected', e);
