@@ -2934,6 +2934,11 @@ const Evaluator = (() => {
         why: `Доля внимания на главном объекте: ${(focus.frac*100).toFixed(0)}%.`,
         act: focus.s < 0.6 ? 'Усилить контраст или изоляцию главного объекта.' : null
       },
+      { id:'clarity', name:'Ясность композиции',
+        s: clarity.s,
+        why: `Концентрация карты внимания: ${(clarity.s*100).toFixed(0)}% (энтропия ${clarity.entropy.toFixed(2)} бит).`,
+        act: clarity.s < 0.25 ? 'Упростить кадр или усилить один главный визуальный акцент.' : null
+      },
       { id:'edges', name:'Края и обрезки',
         s: edges.s,
         why: edges.touches.length
@@ -2955,7 +2960,7 @@ const Evaluator = (() => {
       // Этап 5: только реально реализованные критерии.
       // Дополнительные критерии этапа 6 не участвуют в этой оценке.
       classic: {
-        thirds: 0.30, balance: 0.20, focus: 0.20, edges: 0.15, horizon: 0.15
+        thirds: 0.28, balance: 0.18, focus: 0.18, clarity: 0.08, edges: 0.14, horizon: 0.14
       },
       free: {}
     };
@@ -3103,14 +3108,14 @@ const EvaluatorV2 = (() => {
     ];
 
     const weights={
-      classic:{thirds:.20,balance:.12,focus:.12,edges:.09,horizon:.08,golden:.10,diagonal:.07,lead:.07,headroom:.05,color:.03,simplicity:.03,negative:.02,shotScale:.02,symmetry:0,tilt:0},
-      dynamic:{thirds:.10,balance:.08,focus:.12,edges:.06,horizon:.04,golden:.08,diagonal:.16,lead:.14,headroom:.05,color:.05,simplicity:.03,negative:.04,shotScale:.03,symmetry:0,tilt:.02},
-      symmetry:{thirds:.05,balance:.08,focus:.10,edges:.08,horizon:.08,golden:.05,diagonal:.02,lead:.02,headroom:.05,color:.03,simplicity:.05,negative:.05,shotScale:.04,symmetry:.30,tilt:.10},
-      minimalism:{thirds:.08,balance:.08,focus:.10,edges:.08,horizon:.05,golden:.05,diagonal:.03,lead:.03,headroom:.05,color:.05,simplicity:.20,negative:.15,shotScale:.08,symmetry:.05,tilt:0},
-      portrait:{thirds:.14,balance:.10,focus:.20,edges:.08,horizon:.04,golden:.08,diagonal:.04,lead:.08,headroom:.08,color:.04,simplicity:.04,negative:.03,shotScale:.08,symmetry:.03,tilt:.02},
-      landscape:{thirds:.12,balance:.12,focus:.10,edges:.08,horizon:.16,golden:.08,diagonal:.06,lead:.05,headroom:.03,color:.08,simplicity:.05,negative:.07,shotScale:.03,symmetry:.02,tilt:.03},
-      vertical:{thirds:.15,balance:.10,focus:.15,edges:.08,horizon:.05,golden:.08,diagonal:.08,lead:.08,headroom:.08,color:.05,simplicity:.05,negative:.06,shotScale:.05,symmetry:.02,tilt:0},
-      cinematic:{thirds:.14,balance:.10,focus:.14,edges:.08,horizon:.08,golden:.10,diagonal:.08,lead:.10,headroom:.06,color:.06,simplicity:.04,negative:.06,shotScale:.02,symmetry:0,tilt:.02},
+      classic:{thirds:.20,balance:.12,focus:.12,clarity:.06,edges:.09,horizon:.08,golden:.10,diagonal:.07,lead:.07,headroom:.05,color:.03,simplicity:.03,negative:.02,shotScale:.02,symmetry:0,tilt:0},
+      dynamic:{thirds:.10,balance:.08,focus:.12,clarity:.04,edges:.06,horizon:.04,golden:.08,diagonal:.16,lead:.14,headroom:.05,color:.05,simplicity:.03,negative:.04,shotScale:.03,symmetry:0,tilt:.02},
+      symmetry:{thirds:.05,balance:.08,focus:.10,clarity:.04,edges:.08,horizon:.08,golden:.05,diagonal:.02,lead:.02,headroom:.05,color:.03,simplicity:.05,negative:.05,shotScale:.04,symmetry:.30,tilt:.10},
+      minimalism:{thirds:.08,balance:.08,focus:.10,clarity:.08,edges:.08,horizon:.05,golden:.05,diagonal:.03,lead:.03,headroom:.05,color:.05,simplicity:.20,negative:.15,shotScale:.08,symmetry:.05,tilt:0},
+      portrait:{thirds:.14,balance:.10,focus:.20,clarity:.06,edges:.08,horizon:.04,golden:.08,diagonal:.04,lead:.08,headroom:.08,color:.04,simplicity:.04,negative:.03,shotScale:.08,symmetry:.03,tilt:.02},
+      landscape:{thirds:.12,balance:.12,focus:.10,clarity:.04,edges:.08,horizon:.16,golden:.08,diagonal:.06,lead:.05,headroom:.03,color:.08,simplicity:.05,negative:.07,shotScale:.03,symmetry:.02,tilt:.03},
+      vertical:{thirds:.15,balance:.10,focus:.15,clarity:.04,edges:.08,horizon:.05,golden:.08,diagonal:.08,lead:.08,headroom:.08,color:.05,simplicity:.05,negative:.06,shotScale:.05,symmetry:.02,tilt:0},
+      cinematic:{thirds:.14,balance:.10,focus:.14,clarity:.04,edges:.08,horizon:.08,golden:.10,diagonal:.08,lead:.10,headroom:.06,color:.06,simplicity:.04,negative:.06,shotScale:.02,symmetry:0,tilt:.02},
       free:null
     };
     const all=[...base.criteria,...extra];
