@@ -3081,18 +3081,18 @@ const ImproveEngine = (() => {
       {axis:1,name:'Y',step:0.20},
       {axis:2,name:'Z',step:0.35}
     ];
-    axisSteps.forEach(({axis,name,step})=>[-step,step].forEach(v=>
+    axisSteps.forEach(({axis,name,step})=>[step,-step,step*2.5,-step*2.5].forEach(v=>
       add('Камера '+name+' '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.pos[axis]+=v;},'camera',{axis:name,value:v})
     ));
-    [-4,4].forEach(v=>add('Yaw '+(v>0?'+':'')+v+'°',f=>{f.camera.yaw+=v;},'camera',{axis:'yaw',value:v}));
-    [-3,3].forEach(v=>add('Pitch '+(v>0?'+':'')+v+'°',f=>{f.camera.pitch=clamp(f.camera.pitch+v,-89,89);},'camera',{axis:'pitch',value:v}));
-    [-3,3].forEach(v=>add('Roll '+(v>0?'+':'')+v+'°',f=>{f.camera.roll=clamp(f.camera.roll+v,-45,45);},'camera',{axis:'roll',value:v}));
+    [-12,-8,-4,4,8,12].forEach(v=>add('Yaw '+(v>0?'+':'')+v+'°',f=>{f.camera.yaw+=v;},'camera',{axis:'yaw',value:v}));
+    [-8,-5,-3,3,5,8].forEach(v=>add('Pitch '+(v>0?'+':'')+v+'°',f=>{f.camera.pitch=clamp(f.camera.pitch+v,-89,89);},'camera',{axis:'pitch',value:v}));
+    [-8,-3,3,8].forEach(v=>add('Roll '+(v>0?'+':'')+v+'°',f=>{f.camera.roll=clamp(f.camera.roll+v,-45,45);},'camera',{axis:'roll',value:v}));
     // В look-at режиме сдвиг цели даёт понятное перекадрирование без перемещения камеры.
-    [-0.25,0.25].forEach(v=>add('Цель по X '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[0]+=v;},'target',{axis:'x',value:v}));
-    [-0.20,0.20].forEach(v=>add('Цель по Y '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[1]+=v;},'target',{axis:'y',value:v}));
-    // Два относительных и два абсолютных шага позволяют не застревать на грубой сетке.
-    [0.90,0.96,1.04,1.10].forEach(k=>add('Фокусное ×'+k.toFixed(2),f=>{f.lens.focalMm=clamp(f.lens.focalMm*k,14,300);},'lens',{axis:'focalMm',factor:k}));
-    [-5,5].forEach(v=>add('Фокусное '+(v>0?'+':'')+v+' мм',f=>{f.lens.focalMm=clamp(f.lens.focalMm+v,14,300);},'lens',{axis:'focalMm',value:v}));
+    [-0.60,-0.25,0.25,0.60].forEach(v=>add('Цель по X '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[0]+=v;},'target',{axis:'x',value:v}));
+    [-0.45,-0.20,0.20,0.45].forEach(v=>add('Цель по Y '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[1]+=v;},'target',{axis:'y',value:v}));
+    // Шире ищем масштаб плана: маленькие и заметные изменения.
+    [0.78,0.88,0.96,1.04,1.12,1.25].forEach(k=>add('Фокусное ×'+k.toFixed(2),f=>{f.lens.focalMm=clamp(f.lens.focalMm*k,14,300);},'lens',{axis:'focalMm',factor:k}));
+    [-12,-5,5,12].forEach(v=>add('Фокусное '+(v>0?'+':'')+v+' мм',f=>{f.lens.focalMm=clamp(f.lens.focalMm+v,14,300);},'lens',{axis:'focalMm',value:v}));
     // У крайних значений не плодим идентичные варианты.
     const seen=new Set();
     return out.filter(c=>{
@@ -3127,7 +3127,7 @@ const ImproveEngine = (() => {
       best:changed?best:null,
       checked:pool.length,
       weakCriterion:weak?{name:weak.name||weak.label||'Критерий',score:weak.s,act:weak.act||''}:null,
-      alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.result.total,deltaScore:c.deltaScore})),
+      alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.result.total,deltaScore:c.deltaScore,candidate:c})),
       sourceFrameId:frame.id,
       _test:{
         originalUnchanged:JSON.stringify(frame)===JSON.stringify(beforeFrame),
@@ -3574,29 +3574,35 @@ const UI = (() => {
       requestAnimationFrame(() => {
         try{
           const result=ImproveEngine.improve(frame,profile);
-          if(!result.changed){
-            el.improveBox.innerHTML='<div class="iaHead"><span>Улучшение не найдено</span><span class="iaMuted">'+result.checked+' вариантов проверено</span></div><div class="iaMuted" style="margin-top:5px">Текущий кадр уже лучше найденных локальных вариантов.</div>';
-            return;
-          }
-          const b=Math.round(result.before.total*100), a=Math.round(result.best.result.total*100);
+          const b=Math.round(result.before.total*100);
           const weak=result.weakCriterion;
+          const hasGain=result.changed && result.best;
           const alternatives=(result.alternatives||[]).slice(0,3).map((c,i)=>
-            '<div class="iaMuted" style="margin-top:3px">'+(i+1)+'. '+escapeHtml(c.label)+' · '+Math.round(c.total*100)+'% ('+(c.deltaScore>=0?'+':'')+Math.round(c.deltaScore*100)+' п.п.)</div>'
+            '<div class="iaAlt" style="border-top:1px solid #343438;padding-top:6px;margin-top:6px">'+
+              '<div class="iaHead"><span>'+(i+1)+'. '+escapeHtml(c.label)+'</span><span class="iaMuted">'+Math.round(c.total*100)+'%</span></div>'+
+              '<div class="iaMuted">'+(c.deltaScore>=0?'+':'')+Math.round(c.deltaScore*100)+' п.п. к текущей оценке</div>'+
+              '<button class="iaTry" data-variant="'+i+'" style="margin-top:4px;width:100%">'+(c.deltaScore>0.002?'Применить улучшение':'Попробовать этот вариант')+'</button>'+
+            '</div>'
           ).join('');
-          el.improveBox.innerHTML='<div class="iaHead"><span>Было → стало</span><span class="iaMuted">'+escapeHtml(result.best.label)+'</span></div>'+
+          el.improveBox.innerHTML='<div class="iaHead"><span>'+(hasGain?'Найдено улучшение':'Заметного улучшения не найдено')+'</span><span class="iaMuted">'+result.checked+' вариантов</span></div>'+
             '<div class="iaGrid"><div class="iaCell"><div class="iaMuted">Сейчас</div><div class="iaScore">'+b+'%</div></div>'+
-            '<div class="iaCell"><div class="iaMuted">Предложение</div><div class="iaScore">'+a+'%</div></div></div>'+
-            '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || 'Предложение выбрано по суммарной оценке профиля.')+'</div>'+
-            '<div class="iaMuted" style="margin-top:8px">Другие варианты:</div>'+alternatives+
-            '<div class="iaActions"><button id="btnImproveApply" class="on">Применить</button><button id="btnImproveReject">Отклонить</button></div>';
-          document.getElementById('btnImproveApply').onclick=()=>{
-            const applied=ImproveEngine.apply(result);
-            el.improveBox.style.display='none';
-            if(!applied){ toast('Кадр изменился. Постройте предложение заново.'); return; }
-            refreshCameraUI();
-            SceneManager.updateShotCamViz(FrameAdapter.frameToShot(State.currentFrame()), FrameAdapter.lensOf(State.currentFrame()));
-            runEvaluationNow();
-          };
+            '<div class="iaCell"><div class="iaMuted">'+(hasGain?'Лучший результат':'Лучший эксперимент')+'</div><div class="iaScore">'+Math.round((result.alternatives?.[0]?.total??result.before.total)*100)+'%</div></div></div>'+
+            '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || (hasGain?'Вариант выбран по суммарной оценке профиля.':'Все проверенные изменения оценены не выше текущего кадра; можно посмотреть ближайшие эксперименты.'))+'</div>'+
+            '<div class="iaMuted" style="margin-top:8px;font-weight:600">Три лучших варианта:</div>'+alternatives+
+            '<div class="iaActions"><button id="btnImproveReject">Закрыть</button></div>';
+          el.improveBox.querySelectorAll('.iaTry').forEach(btn=>{
+            btn.onclick=()=>{
+              const choice=result.alternatives?.[Number(btn.dataset.variant)]?.candidate;
+              if(!choice){toast('Вариант недоступен. Пересчитай улучшение.');return;}
+              const chosen={...result,changed:true,best:choice};
+              const applied=ImproveEngine.apply(chosen);
+              if(!applied){toast('Кадр изменился. Построй предложение заново.');return;}
+              el.improveBox.style.display='none';
+              refreshCameraUI();
+              SceneManager.updateShotCamViz(FrameAdapter.frameToShot(State.currentFrame()), FrameAdapter.lensOf(State.currentFrame()));
+              runEvaluationNow();
+            };
+          });
           document.getElementById('btnImproveReject').onclick=()=>{ el.improveBox.style.display='none'; };
         }catch(e){
           console.error('Improve failed',e);
