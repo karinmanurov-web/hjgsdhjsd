@@ -3569,11 +3569,15 @@ const UI = (() => {
             return;
           }
           const b=Math.round(result.before.total*100), a=Math.round(result.best.result.total*100);
-          const weak=result.best.result.criteria.find(c=>c.s<0.6);
+          const weak=result.weakCriterion;
+          const alternatives=(result.alternatives||[]).slice(0,3).map((c,i)=>
+            '<div class="iaMuted" style="margin-top:3px">'+(i+1)+'. '+escapeHtml(c.label)+' · '+Math.round(c.total*100)+'% ('+(c.deltaScore>=0?'+':'')+Math.round(c.deltaScore*100)+' п.п.)</div>'
+          ).join('');
           el.improveBox.innerHTML='<div class="iaHead"><span>Было → стало</span><span class="iaMuted">'+escapeHtml(result.best.label)+'</span></div>'+
             '<div class="iaGrid"><div class="iaCell"><div class="iaMuted">Сейчас</div><div class="iaScore">'+b+'%</div></div>'+
             '<div class="iaCell"><div class="iaMuted">Предложение</div><div class="iaScore">'+a+'%</div></div></div>'+
-            '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || 'Локальное улучшение композиции.')+'</div>'+
+            '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || 'Предложение выбрано по суммарной оценке профиля.')+'</div>'+
+            '<div class="iaMuted" style="margin-top:8px">Другие варианты:</div>'+alternatives+
             '<div class="iaActions"><button id="btnImproveApply" class="on">Применить</button><button id="btnImproveReject">Отклонить</button></div>';
           document.getElementById('btnImproveApply').onclick=()=>{
             ImproveEngine.apply(result);
@@ -5770,6 +5774,29 @@ function runTests(){
     State.switchFrame('k7', Q2);
     ok('Состояние кадра сохраняется после JSON-круга', Q2.objects[0].transform.pos[0] === 7);
     ok('Все кадры сохранены (20)', Q2.frames.length === 20);
+  }
+
+  /* ---- Этап 6: поиск улучшений ---- */
+  {
+    const source=State.currentFrame();
+    const before=JSON.stringify(source);
+    const pool=ImproveEngine._test.candidates(source);
+    ok('ImproveEngine: есть расширенный набор кандидатов',pool.length>=20);
+    ok('ImproveEngine: исходный кадр не мутируется при генерации',JSON.stringify(source)===before);
+    ok('ImproveEngine: кандидаты сохраняют структуру камеры и объектива',pool.every(c=>Array.isArray(c.frame.camera.pos)&&Array.isArray(c.frame.camera.target)&&Number.isFinite(c.frame.lens.focalMm)));
+    ok('ImproveEngine: фокусное не выходит за 14–300 мм',pool.every(c=>c.frame.lens.focalMm>=14&&c.frame.lens.focalMm<=300));
+    const unique=new Set(pool.map(c=>JSON.stringify([c.frame.camera.pos,c.frame.camera.target,c.frame.camera.yaw,c.frame.camera.pitch,c.frame.camera.roll,c.frame.lens.focalMm])));
+    ok('ImproveEngine: нет повторяющихся вариантов',unique.size===pool.length);
+    try{
+      const result=ImproveEngine.improve(source,'classic');
+      ok('ImproveEngine: оценка возвращает конечный балл',Number.isFinite(result.before.total));
+      ok('ImproveEngine: число проверенных совпадает с пулом',result.checked===pool.length);
+      ok('ImproveEngine: предложение строго лучше порога либо отсутствует',result.changed ? result.best.result.total>result.before.total+0.002 : result.best===null);
+      ok('ImproveEngine: исходный кадр не меняется после оценки',JSON.stringify(source)===before);
+      ok('ImproveEngine: до трёх альтернатив отсортированы по баллу',result.alternatives.length<=3&&result.alternatives.every((a,i,arr)=>i===0||arr[i-1].total>=a.total));
+    }catch(e){
+      ok('ImproveEngine: оценка кандидатов выполняется без ошибки',false);
+    }
   }
 
   const passed = results.filter(r => r.ok).length;
