@@ -3128,7 +3128,13 @@ const ImproveEngine = (() => {
       checked:pool.length,
       weakCriterion:weak?{name:weak.name||weak.label||'Критерий',score:weak.s,act:weak.act||''}:null,
       alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.result.total,deltaScore:c.deltaScore})),
-      _test:{originalUnchanged:JSON.stringify(frame)===JSON.stringify(beforeFrame),candidateCount:pool.length}
+      sourceFrameId:frame.id,
+      _test:{
+        originalUnchanged:JSON.stringify(frame)===JSON.stringify(beforeFrame),
+        candidateCount:pool.length,
+        baselineCamera:JSON.stringify(beforeFrame.camera),
+        baselineLens:JSON.stringify(beforeFrame.lens)
+      }
     };
   }
 
@@ -3136,6 +3142,10 @@ const ImproveEngine = (() => {
     if(!result?.changed || !result.best?.frame) return false;
     const current=State.currentFrame();
     if(!current?.camera || !current?.lens) return false;
+    // Не применяем устаревшее предложение к другому кадру или после ручной правки.
+    if(result.sourceFrameId && current.id!==result.sourceFrameId) return false;
+    if(result._test?.baselineCamera && JSON.stringify(current.camera)!==result._test.baselineCamera) return false;
+    if(result._test?.baselineLens && JSON.stringify(current.lens)!==result._test.baselineLens) return false;
     const next=result.best.frame;
     State.History.tx(()=>{
       current.camera=JSON.parse(JSON.stringify(next.camera));
@@ -3580,8 +3590,9 @@ const UI = (() => {
             '<div class="iaMuted" style="margin-top:8px">Другие варианты:</div>'+alternatives+
             '<div class="iaActions"><button id="btnImproveApply" class="on">Применить</button><button id="btnImproveReject">Отклонить</button></div>';
           document.getElementById('btnImproveApply').onclick=()=>{
-            ImproveEngine.apply(result);
+            const applied=ImproveEngine.apply(result);
             el.improveBox.style.display='none';
+            if(!applied){ toast('Кадр изменился. Постройте предложение заново.'); return; }
             refreshCameraUI();
             SceneManager.updateShotCamViz(FrameAdapter.frameToShot(State.currentFrame()), FrameAdapter.lensOf(State.currentFrame()));
             runEvaluationNow();
