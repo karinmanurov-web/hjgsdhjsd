@@ -2788,34 +2788,16 @@ const Evaluator = (() => {
 
   /* ---------- Основной расчёт ---------- */
   function computeMainObjBBox(frame, cam){
-    // Находим главный объект: явный mainObjId, иначе role=main
+    // Находим главный объект: явный mainObjId, иначе role=main.
     let main = null;
     const id = frame.camera.mainObjId;
     if(id) main = State.get().objects.find(o => o.id === id);
     if(!main) main = State.get().objects.find(o => o.role === 'main');
     if(!main) return null;
     const root = SceneManager.getRenderInfo().rootGroup;
-    const ov = frame.overrides?.[main.id] || {};
-    const eff = ov.transform ? { ...main.transform, ...ov.transform } : main.transform;
-    const center = new THREE.Vector3(...eff.pos);
-    const size = AnalyzerLite.guessObjectSize(main);
-    const corners = [
-      [-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],
-      [-1,-1, 1],[1,-1, 1],[-1,1, 1],[1,1, 1]
-    ].map(([sx,sy,sz]) => new THREE.Vector3(
-      center.x + sx*size.x/2, center.y + sy*size.y/2, center.z + sz*size.z/2
-    ).applyMatrix4(root.matrixWorld));
-    const project = new THREE.Vector3();
-    let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-    for(const c of corners){
-      project.copy(c).project(cam);
-      const u = (project.x + 1)/2;
-      const v = (1 - project.y)/2;
-      if(u < uMin) uMin = u; if(u > uMax) uMax = u;
-      if(v < vMin) vMin = v; if(v > vMax) vMax = v;
-    }
-    return { objId: main.id, u0: uMin, u1: uMax, v0: vMin, v1: vMax,
-             u: (uMin+uMax)/2, v: (vMin+vMax)/2 };
+    const box = computeObjectScreenBBox(main, frame, cam, root);
+    return box ? { objId: main.id, u0: box.u0, u1: box.u1, v0: box.v0, v1: box.v1,
+                   u: box.u, v: box.v, area: box.area } : null;
   }
 
   function computeObjectScreenBBox(obj, frame, cam, root){
@@ -2825,31 +2807,47 @@ const Evaluator = (() => {
 
     const tr = { ...(obj.transform || {}), ...(ov.transform || {}) };
     const pos = tr.pos || [0,0,0];
+    const rot = tr.rotEuler || [0,0,0];
+    const rawScale = tr.scale || [1,1,1];
     const size = AnalyzerLite.guessObjectSize(obj);
     if(!size || ![size.x,size.y,size.z].every(Number.isFinite)) return null;
 
-    const center = new THREE.Vector3(pos[0],pos[1],pos[2]);
+    // Учитываем реальное вращение и масштаб объекта при проекции его габаритов.
+    const center = new THREE.Vector3(pos[0] || 0, pos[1] || 0, pos[2] || 0);
+    const rotation = new THREE.Euler(
+      THREE.MathUtils.degToRad(rot[0] || 0),
+      THREE.MathUtils.degToRad(rot[1] || 0),
+      THREE.MathUtils.degToRad(rot[2] || 0),
+      'XYZ'
+    );
+    const quaternion = new THREE.Quaternion().setFromEuler(rotation);
+    const scale = new THREE.Vector3(
+      Number.isFinite(rawScale[0]) ? rawScale[0] : 1,
+      Number.isFinite(rawScale[1]) ? rawScale[1] : 1,
+      Number.isFinite(rawScale[2]) ? rawScale[2] : 1
+    );
+    const objectMatrix = new THREE.Matrix4().compose(center, quaternion, scale);
     const points = [];
+    root.updateMatrixWorld(true);
+    cam.updateMatrixWorld(true);
     for(const [sx,sy,sz] of [
       [-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],
       [-1,-1,1],[1,-1,1],[-1,1,1],[1,1,1]
     ]){
-      const p = new THREE.Vector3(
-        center.x + sx*size.x/2,
-        center.y + sy*size.y/2,
-        center.z + sz*size.z/2
-      ).applyMatrix4(root.matrixWorld).project(cam);
+      const p = new THREE.Vector3(sx*size.x/2, sy*size.y/2, sz*size.z/2)
+        .applyMatrix4(objectMatrix)
+        .applyMatrix4(root.matrixWorld)
+        .project(cam);
       if(!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z) || p.z < -1 || p.z > 1) continue;
       points.push({u:(p.x+1)/2, v:(1-p.y)/2});
     }
     if(!points.length) return null;
-
     const u0 = Math.max(0, Math.min(...points.map(p=>p.u)));
     const u1 = Math.min(1, Math.max(...points.map(p=>p.u)));
     const v0 = Math.max(0, Math.min(...points.map(p=>p.v)));
     const v1 = Math.min(1, Math.max(...points.map(p=>p.v)));
     if(u1 <= u0 || v1 <= v0) return null;
-    return {u:(u0+u1)/2, v:(v0+v1)/2, area:(u1-u0)*(v1-v0)};
+    return {u0, u1, v0, v1, u:(u0+u1)/2, v:(v0+v1)/2, area:(u1-u0)*(v1-v0)};
   }
 
   function computeCompositionCentroid(frame, cam, mainBBox){
