@@ -1065,6 +1065,8 @@ const LensModel = (() => {
 /* ============================================================
    SceneManager — редактор (свой WebGLRenderer)
    ============================================================ */
+const MIN_EDITABLE_DEPTH = 0.05; // тонкая базовая глубина, чтобы масштаб по Z работал у плоских фигур
+
 const SceneManager = (() => {
   let renderer, scene, editorCamera, orbit, tcontrols;
   let container = null;
@@ -1380,7 +1382,8 @@ const SceneManager = (() => {
       case 'line': geom = new THREE.BoxGeometry(p.length ?? 1, p.thickness ?? 0.01, p.thickness ?? 0.01); break;
       case 'rect': {
         const w = p.width ?? 1, h = p.height ?? 1, ex = p.extrude ?? 0;
-        geom = ex > 0 ? new THREE.BoxGeometry(w,h,ex) : new THREE.PlaneGeometry(w,h);
+        // Геометрия с нулевой глубиной не может утолщаться гизмо по Z.
+        geom = new THREE.BoxGeometry(w,h,Math.max(ex, MIN_EDITABLE_DEPTH));
         break;
       }
       case 'circle': {
@@ -1394,7 +1397,9 @@ const SceneManager = (() => {
           // CylinderGeometry is Y-up; align its depth with the scene's Z axis.
           geom.rotateX(Math.PI / 2);
         } else {
-          geom = new THREE.CircleGeometry(r, 64);
+          // Диск выглядит плоским, но имеет минимальную глубину для Z-масштабирования.
+          geom = new THREE.CylinderGeometry(r, r, MIN_EDITABLE_DEPTH, 64);
+          geom.rotateX(Math.PI / 2);
         }
         break;
       }
@@ -1408,8 +1413,9 @@ const SceneManager = (() => {
           if(i===0) shape.moveTo(x,y); else shape.lineTo(x,y);
         }
         shape.closePath();
-        if(ex > 0){ geom = new THREE.ExtrudeGeometry(shape, { depth:ex, bevelEnabled:false }); geom.translate(0,0,-ex/2); }
-        else geom = new THREE.ShapeGeometry(shape);
+        const depth = Math.max(ex, MIN_EDITABLE_DEPTH);
+        geom = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled:false });
+        geom.translate(0,0,-depth/2);
         break;
       }
       default: geom = new THREE.BoxGeometry(0.5,0.5,0.5);
@@ -2315,13 +2321,13 @@ const AnalyzerLite = (() => {
     switch(obj.type){
       case 'point': return { x: p.size ?? 0.05, y: p.size ?? 0.05, z: p.size ?? 0.05 };
       case 'line': return { x: p.length ?? 1, y: p.thickness ?? 0.01, z: p.thickness ?? 0.01 };
-      case 'rect': return { x: p.width ?? 1, y: p.height ?? 1, z: p.extrude ?? 0.01 };
+      case 'rect': return { x: p.width ?? 1, y: p.height ?? 1, z: Math.max(p.extrude ?? 0, MIN_EDITABLE_DEPTH) };
       case 'circle': {
         const r = p.radius ?? 0.5;
         const form = p.form || ((p.extrude ?? 0) > 0 ? 'cylinder' : 'disk');
-        return { x:r*2, y:r*2, z:form === 'ellipsoid' ? r*2 : form === 'cylinder' ? Math.max(0.01,p.extrude ?? 0.5) : 0.01 };
+        return { x:r*2, y:r*2, z:form === 'ellipsoid' ? r*2 : form === 'cylinder' ? Math.max(MIN_EDITABLE_DEPTH,p.extrude ?? 0.5) : MIN_EDITABLE_DEPTH };
       }
-      case 'polygon': return { x: (p.radius ?? 0.5)*2, y: (p.radius ?? 0.5)*2, z: p.extrude ?? 0.01 };
+      case 'polygon': return { x: (p.radius ?? 0.5)*2, y: (p.radius ?? 0.5)*2, z: Math.max(p.extrude ?? 0, MIN_EDITABLE_DEPTH) };
       default: return { x: 0.5, y: 0.5, z: 0.5 };
     }
   }
@@ -5826,7 +5832,11 @@ function runTests(){
     const disk = AnalyzerLite.guessObjectSize({type:'circle',params:{radius:0.5,form:'disk',extrude:0}});
     const cylinder = AnalyzerLite.guessObjectSize({type:'circle',params:{radius:0.5,form:'cylinder',extrude:0.8}});
     const ellipsoid = AnalyzerLite.guessObjectSize({type:'circle',params:{radius:0.5,form:'ellipsoid'}});
-    ok('Круг: плоская форма сохраняет малую толщину Z', disk.z <= 0.01);
+    ok('Круг: тонкая форма имеет глубину для Z-масштаба', disk.z >= MIN_EDITABLE_DEPTH);
+    const rect = AnalyzerLite.guessObjectSize({type:'rect',params:{width:1,height:1,extrude:0}});
+    const polygon = AnalyzerLite.guessObjectSize({type:'polygon',params:{radius:0.5,extrude:0}});
+    ok('Прямоугольник: Z-масштаб имеет геометрическую глубину', rect.z >= MIN_EDITABLE_DEPTH);
+    ok('Многоугольник: Z-масштаб имеет геометрическую глубину', polygon.z >= MIN_EDITABLE_DEPTH);
     t('Цилиндр: толщина Z берётся из параметра', cylinder.z, 0.8, 0.001);
     t('Эллипсоид: глубина равна диаметру', ellipsoid.z, 1, 0.001);
   }
