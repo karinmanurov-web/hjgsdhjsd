@@ -1384,8 +1384,18 @@ const SceneManager = (() => {
         break;
       }
       case 'circle': {
-        const r = p.radius ?? 0.5, ex = p.extrude ?? 0;
-        geom = ex > 0 ? new THREE.CylinderGeometry(r,r,ex,64) : new THREE.CircleGeometry(r,64);
+        const r = p.radius ?? 0.5;
+        const form = p.form || ((p.extrude ?? 0) > 0 ? 'cylinder' : 'disk');
+        if(form === 'ellipsoid'){
+          geom = new THREE.SphereGeometry(r, 48, 32);
+        } else if(form === 'cylinder'){
+          const depth = Math.max(0.01, p.extrude ?? 0.5);
+          geom = new THREE.CylinderGeometry(r, r, depth, 64);
+          // CylinderGeometry is Y-up; align its depth with the scene's Z axis.
+          geom.rotateX(Math.PI / 2);
+        } else {
+          geom = new THREE.CircleGeometry(r, 64);
+        }
         break;
       }
       case 'polygon': {
@@ -1495,7 +1505,7 @@ const SceneManager = (() => {
       case 'point': params = { size:0.05 }; name = 'Точка'; break;
       case 'line': params = { length:1, thickness:0.01 }; name = 'Линия'; break;
       case 'rect': params = { width:1, height:1, extrude:0 }; name = 'Прямоугольник'; break;
-      case 'circle': params = { radius:0.5, extrude:0 }; name = 'Круг'; break;
+      case 'circle': params = { radius:0.5, extrude:0, form:'disk' }; name = 'Круг / 3D-тело'; break;
       case 'polygon': params = { n:3, radius:0.5, extrude:0 }; name = 'Полигон'; break;
     }
     const data = {
@@ -2306,7 +2316,11 @@ const AnalyzerLite = (() => {
       case 'point': return { x: p.size ?? 0.05, y: p.size ?? 0.05, z: p.size ?? 0.05 };
       case 'line': return { x: p.length ?? 1, y: p.thickness ?? 0.01, z: p.thickness ?? 0.01 };
       case 'rect': return { x: p.width ?? 1, y: p.height ?? 1, z: p.extrude ?? 0.01 };
-      case 'circle': return { x: (p.radius ?? 0.5)*2, y: (p.radius ?? 0.5)*2, z: p.extrude ?? 0.01 };
+      case 'circle': {
+        const r = p.radius ?? 0.5;
+        const form = p.form || ((p.extrude ?? 0) > 0 ? 'cylinder' : 'disk');
+        return { x:r*2, y:r*2, z:form === 'ellipsoid' ? r*2 : form === 'cylinder' ? Math.max(0.01,p.extrude ?? 0.5) : 0.01 };
+      }
       case 'polygon': return { x: (p.radius ?? 0.5)*2, y: (p.radius ?? 0.5)*2, z: p.extrude ?? 0.01 };
       default: return { x: 0.5, y: 0.5, z: 0.5 };
     }
@@ -5177,9 +5191,36 @@ const UI = (() => {
     switch(d.type){
       case 'point': mk('Диаметр (м)','size',0.005,2,0.01); break;
       case 'line': mk('Длина (м)','length',0.01,20,0.1); mk('Толщина (м)','thickness',0.001,0.5,0.005); break;
-      case 'rect': mk('Ширина (м)','width',0.01,20,0.1); mk('Высота (м)','height',0.01,20,0.1); mk('Толщина','extrude',0,5,0.05); break;
-      case 'circle': mk('Радиус (м)','radius',0.01,10,0.05); mk('Толщина','extrude',0,5,0.05); break;
-      case 'polygon': mk('N (3..24)','n',3,24,1); mk('Радиус (м)','radius',0.01,10,0.05); mk('Толщина','extrude',0,5,0.05); break;
+      case 'rect': mk('Ширина (м)','width',0.01,20,0.1); mk('Высота (м)','height',0.01,20,0.1); mk('Толщина по Z (м)','extrude',0,5,0.05); break;
+      case 'circle': {
+        const row = document.createElement('div'); row.className = 'row';
+        row.innerHTML = '<label>Форма</label>';
+        const select = document.createElement('select');
+        select.style.flex = '1';
+        const form = d.params.form || ((d.params.extrude ?? 0) > 0 ? 'cylinder' : 'disk');
+        [['disk','Плоский круг'],['cylinder','Цилиндр'],['ellipsoid','Эллипсоид']].forEach(([value,label]) => {
+          const option = document.createElement('option'); option.value=value; option.textContent=label; select.appendChild(option);
+        });
+        select.value = form;
+        select.addEventListener('change', () => {
+          State.History.tx(() => {
+            d.params.form = select.value;
+            if(select.value === 'cylinder' && !(d.params.extrude > 0)) d.params.extrude = 0.5;
+            if(select.value !== 'cylinder') d.params.extrude = 0;
+          });
+          SceneManager.updateParamsFromData(d); State.save(); scheduleEval();
+        });
+        row.appendChild(select); el.pShapeParams.appendChild(row);
+        mk('Радиус (м)','radius',0.01,10,0.05);
+        if(form === 'cylinder') mk('Толщина по Z (м)','extrude',0.01,5,0.05);
+        if(form === 'ellipsoid'){
+          const hint=document.createElement('div'); hint.className='hint';
+          hint.textContent='Форма вытягивается по осям X/Y/Z полями «Масштаб».';
+          el.pShapeParams.appendChild(hint);
+        }
+        break;
+      }
+      case 'polygon': mk('N (3..24)','n',3,24,1); mk('Радиус (м)','radius',0.01,10,0.05); mk('Толщина по Z (м)','extrude',0,5,0.05); break;
     }
   }
   function renderColor(d){
@@ -5777,6 +5818,16 @@ function runTests(){
   {
     const r = Evaluator._test.s_thirds_fromPoint(0.5, 0.5);
     t('S_thirds в центре', r.s, 0.29, 0.02);
+  }
+
+  // Толщина и формы круга: габариты совпадают с геометрией.
+  {
+    const disk = AnalyzerLite.guessObjectSize({type:'circle',params:{radius:0.5,form:'disk',extrude:0}});
+    const cylinder = AnalyzerLite.guessObjectSize({type:'circle',params:{radius:0.5,form:'cylinder',extrude:0.8}});
+    const ellipsoid = AnalyzerLite.guessObjectSize({type:'circle',params:{radius:0.5,form:'ellipsoid'}});
+    ok('Круг: плоская форма сохраняет малую толщину Z', disk.z <= 0.01);
+    t('Цилиндр: толщина Z берётся из параметра', cylinder.z, 0.8, 0.001);
+    t('Эллипсоид: глубина равна диаметру', ellipsoid.z, 1, 0.001);
   }
 
   // Центр композиции: среднее по массам и дополнительный вес главного объекта.
