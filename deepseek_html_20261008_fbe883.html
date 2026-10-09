@@ -5630,8 +5630,24 @@ function runTests(){
     t('S_balance в центре', b, 1, 0.0001);
     const f = Evaluator._test.s_focus({ map: new Float32Array(16).fill(1/16), W:4, H:4 }, { u0:0, u1:0.5, v0:0, v1:0.5 });
     ok('S_focus API работает', Number.isFinite(f.s) && Number.isFinite(f.frac));
-    const cl = Evaluator._test.s_clarity({ map: new Float32Array(16).fill(0.1), W:4, H:4 });
+    const uniformMap = { map: new Float32Array(16).fill(0.1), W:4, H:4 };
+    const cl = Evaluator._test.s_clarity(uniformMap);
     ok('S_clarity API работает', !!cl && Number.isFinite(cl.s));
+    t('S_clarity: равномерное внимание не считается ясным', cl.s, 0, 0.001);
+    const concentrated = new Float32Array(16); concentrated[5] = 1;
+    const sharp = Evaluator._test.s_clarity({ map: concentrated, W:4, H:4 });
+    t('S_clarity: одно выраженное пятно внимания', sharp.s, 1, 0.001);
+
+    const insideMap = new Float32Array(16); insideMap[0]=1; insideMap[1]=1;
+    const focusInside = Evaluator._test.s_focus(
+      { map: insideMap, W:4, H:4 }, { u0:0, u1:0.34, v0:0, v1:0.34 }
+    );
+    const outsideMap = new Float32Array(16); outsideMap[15]=1;
+    const focusOutside = Evaluator._test.s_focus(
+      { map: outsideMap, W:4, H:4 }, { u0:0, u1:0.34, v0:0, v1:0.34 }
+    );
+    ok('S_focus: внимание на главном объекте выше', focusInside.s > focusOutside.s);
+    t('S_focus: доля внимания внутри объекта', focusInside.frac, 1, 0.001);
   }
 
   // Горизонт
