@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FrameLab — Этап 5</title>
+<title>FrameLab — Этап 6</title>
 <style>
   :root{
     --bg:#1e1e1e; --bg2:#252526; --bg3:#2d2d30; --bd:#3f3f46;
@@ -11,7 +11,7 @@
     --accSoft:#1e3a5f;
     --ok:#4caf50; --warn:#ff9800; --err:#f44336;
     --h-menu:28px; --h-ctrl:32px; --h-film:112px; --h-ruler:18px;
-    --w-tools:56px; --w-panel:360px; --w-ruler:18px;
+    --w-tools:56px; --w-panel:400px; --w-ruler:18px;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
@@ -33,7 +33,7 @@
   .row>label{min-width:64px;color:var(--fg2)}
   .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
   .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
-  #app{display:grid;height:100%;
+  #app{display:grid;height:100%;position:relative;
     grid-template-rows:var(--h-menu) var(--h-ctrl) 1fr var(--h-film);
     grid-template-columns:var(--w-tools) 1fr var(--w-panel);
     grid-template-areas:
@@ -81,9 +81,24 @@
   #tabs button{border-radius:4px}
   #hud{position:absolute;left:8px;bottom:8px;color:var(--fg2);font-size:11px;
     background:rgba(0,0,0,.55);padding:4px 8px;border-radius:4px;pointer-events:none;z-index:7}
-  #panel{grid-area:panel;background:var(--bg2);border-left:1px solid var(--bd);
+  #panel{grid-area:panel;background:var(--bg2);border-left:1px solid var(--bd);position:relative;
     overflow-y:auto;padding:8px}
-  #film{grid-area:film;background:var(--bg2);border-top:1px solid var(--bd);
+  /* Разделители: лежат прямо в #app и позиционируются по переменным размеров */
+  .splitter{position:absolute;z-index:100;background:transparent;touch-action:none;user-select:none}
+  .splitter::after{content:"";position:absolute;background:transparent;transition:background .1s}
+  .splitter:hover::after,.splitter.dragging::after{background:var(--acc)}
+  .splitter.v{top:calc(var(--h-menu) + var(--h-ctrl));bottom:var(--h-film);width:10px;cursor:ew-resize}
+  .splitter.v::after{left:4px;top:0;bottom:0;width:2px}
+  .splitter.h{left:0;right:0;height:10px;cursor:ns-resize}
+  .splitter.h::after{top:4px;left:0;right:0;height:2px}
+  #panelResize{right:var(--w-panel);transform:translateX(50%)}
+  #toolsResize{left:var(--w-tools);transform:translateX(-50%)}
+  #filmResize{bottom:var(--h-film);transform:translateY(50%)}
+  body.hidePanels .splitter,body.hideAll .splitter{display:none}
+  #panel{min-width:0;min-height:0}
+#panel .body{min-width:0}
+#panel input,#panel select,#panel textarea{min-width:0}
+#film{grid-area:film;background:var(--bg2);border-top:1px solid var(--bd);
     display:flex;align-items:center;gap:6px;padding:6px 8px;overflow-x:auto}
   .panelSection{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;
     margin-bottom:8px;overflow:hidden}
@@ -112,7 +127,7 @@
   .objItem .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .objItem .ic{width:18px;text-align:center;opacity:.7}
   .objItem .ic:hover{opacity:1}
-  .filmItem{min-width:160px;height:90px;background:#111;border:2px solid var(--bd);
+  .filmItem{min-width:160px;height:max(56px,calc(var(--h-film) - 22px));flex:none;background:#111;border:2px solid var(--bd);
     border-radius:4px;display:flex;flex-direction:column;align-items:center;
     justify-content:center;color:var(--fg2);font-size:11px;cursor:pointer;
     position:relative;overflow:hidden;user-select:none}
@@ -186,6 +201,15 @@
   .pillRow{display:flex;gap:2px;background:#1a1a1a;border:1px solid var(--bd);border-radius:5px;padding:2px}
   .pillRow button{flex:1;border:0;background:transparent;border-radius:3px;padding:4px 6px;font-size:11px}
   .pillRow button.on{background:var(--acc);color:#fff;font-weight:600}
+  .improveBox{background:#202024;border:1px solid var(--bd);border-radius:6px;padding:8px}
+  .improveBox .iaHead{display:flex;justify-content:space-between;gap:6px;align-items:center;font-weight:600}
+  .improveBox .iaGrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+  .improveBox .iaCell{background:#171719;border:1px solid #343438;border-radius:4px;padding:6px}
+  .improveBox .iaScore{font-size:18px;font-weight:700}
+  .improveBox .iaMuted{color:var(--fg2);font-size:11px}
+  .improveBox .iaActions{display:flex;gap:6px;margin-top:7px}
+  .improveBox .iaActions button{flex:1}
+  #lensCompareCanvas{border:1px solid var(--bd);border-radius:6px}
 </style>
 </head>
 <body>
@@ -318,6 +342,11 @@
     <div class="toast" id="toast"></div>
   </div>
 
+  <!-- Разделители размеров (двойной клик — вернуть исходный размер) -->
+  <div id="toolsResize" class="splitter v" title="Ширина левой колонки (двойной клик — сброс)"></div>
+  <div id="panelResize" class="splitter v" title="Ширина правой панели (двойной клик — сброс)"></div>
+  <div id="filmResize" class="splitter h" title="Высота нижней панели (двойной клик — сброс)"></div>
+
   <div id="panel">
     <!-- Оценка -->
     <div class="panelSection" data-sec="eval">
@@ -329,13 +358,22 @@
           <label>Профиль</label>
           <select id="evalProfileSel">
             <option value="classic">Классика</option>
+            <option value="dynamic">Динамика</option>
+            <option value="symmetry">Симметрия</option>
+            <option value="minimalism">Минимализм</option>
+            <option value="portrait">Портрет</option>
+            <option value="landscape">Пейзаж</option>
+            <option value="vertical">Вертикальное видео</option>
+            <option value="cinematic">Cinematic Wide</option>
             <option value="free">Свободный</option>
           </select>
         </div>
         <div class="row">
           <button id="btnReeval">Пересчитать</button>
+          <button id="btnImprove" class="on">✦ Улучшить</button>
           <button id="btnEvalAuto" class="on">Авто</button>
         </div>
+        <div id="improveBox" style="display:none;margin-top:8px"></div>
         <div class="hint">Авто = пересчёт через 350 мс после изменений.</div>
         <div id="criteriaList" style="margin-top:8px"></div>
         <div class="hint" style="margin-top:8px;border-top:1px solid var(--bd);padding-top:6px">
@@ -448,6 +486,9 @@
           </div>
         </div>
         <div class="row">
+          <button id="btnCamReset" style="flex:1">Сбросить положение камеры</button>
+        </div>
+        <div class="row">
           <label>Цель</label>
           <select id="camTargetSel" style="flex:1"></select>
         </div>
@@ -476,6 +517,21 @@
           <input type="number" id="camSn" min="0.1" max="100" step="0.05" style="width:64px"></div>
         <div class="hint">Пресеты (мм)</div>
         <div id="camPresets" class="grid4" style="margin-bottom:6px"></div>
+        <div class="row" style="margin-top:6px">
+          <button id="btnLensCompare" style="flex:1">▦ Сравнить 4 фокусных</button>
+        </div>
+        <div class="gridGroup" style="margin-top:8px">Dolly Zoom</div>
+        <div class="hint">Одновременная смена фокусного и дистанции с сохранением размера объекта.</div>
+        <div class="row"><label>f₁ / f₂</label>
+          <input type="number" id="dollyF1" min="4" max="400" step="0.5" style="width:70px">
+          <input type="number" id="dollyF2" min="4" max="400" step="0.5" style="width:70px"></div>
+        <div class="row"><label>Позиция</label>
+          <input type="range" id="dollyT" min="0" max="1" step="0.01" style="flex:1">
+          <span id="dollyTVal" class="hint" style="width:38px">0%</span>
+        </div>
+        <div class="row"><button id="btnDollyApply" style="flex:1">Применить позицию</button><button id="btnDollyReset">Сброс</button></div>
+        <div class="kv">Дистанция до цели: <b id="dollyDist">—</b></div>
+        <div class="kv">Масштаб объекта: <b id="dollyScaleCheck">—</b></div>
         <div class="row">
           <label>Смена f</label>
           <div class="pillRow" style="flex:1">
@@ -554,7 +610,11 @@
 
   <div id="film">
     <button id="btnAddFrameFilm" title="Добавить кадр">+</button>
-    <div id="filmstrip" style="display:flex;gap:6px;align-items:center;flex:1;min-height:96px"></div>
+    <button id="seqPlay" title="Воспроизвести раскадровку">▶</button>
+    <button id="seqLoop" title="Зациклить" class="on">↻</button>
+    <input id="seqBar" type="range" min="0" max="100" value="0" step="1" style="width:120px">
+    <span id="seqTime" class="hint" style="min-width:85px">0.0 / 0.0 с</span>
+    <div id="filmstrip" style="display:flex;gap:6px;align-items:center;flex:1;min-height:0"></div>
   </div>
 </div>
 
@@ -586,6 +646,20 @@
       <button id="nfCancel">Отмена</button>
       <button id="nfCreate" class="on">Создать</button>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="lensCompareModal">
+  <div class="modalBox" style="width:min(1100px,95vw)">
+    <div style="display:flex;justify-content:space-between;align-items:center"><h2>Сравнение фокусных</h2><button id="lensCompareClose">Закрыть</button></div>
+    <div class="row" style="margin-bottom:8px"><label>Фокусные</label>
+      <input id="cmpF1" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <input id="cmpF2" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <input id="cmpF3" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <input id="cmpF4" type="number" min="4" max="400" step="0.5" style="width:70px">
+      <button id="cmpRender" class="on">Обновить</button>
+    </div>
+    <canvas id="lensCompareCanvas" style="width:100%;height:min(70vh,650px);display:block;background:#000"></canvas>
   </div>
 </div>
 
@@ -699,9 +773,47 @@ const State = (() => {
   }
   function load(){
     try{
-      const raw = localStorage.getItem('framelab.project.v5');
-      project = raw ? JSON.parse(raw) : defaultProject();
-    }catch(e){ project = defaultProject(); }
+      const rawV5 = localStorage.getItem('framelab.project.v5');
+      const rawLegacy = localStorage.getItem('framelab.project');
+
+      if(rawV5){
+        project = JSON.parse(rawV5);
+
+        // If the v5 state was created by a failed/empty migration, but the
+        // older project still contains a real scene, prefer the real scene.
+        if(Array.isArray(project.objects) && project.objects.length === 0 && rawLegacy){
+          const legacy = JSON.parse(rawLegacy);
+          if(Array.isArray(legacy.objects) && legacy.objects.length > 0){
+            project.name = legacy.name || project.name;
+            project.units = legacy.units || project.units;
+            project.objects = legacy.objects;
+
+            const legacyShot = legacy.shotCam || defaultShotCam();
+            const first = defaultFrame('Кадр 1', legacyShot);
+            project.frames = [first];
+            project.currentFrameId = first.id;
+          }
+        }
+      }else if(rawLegacy){
+        const legacy = JSON.parse(rawLegacy);
+        project = defaultProject();
+        project.name = legacy.name || project.name;
+        project.units = legacy.units || project.units;
+        project.objects = Array.isArray(legacy.objects) ? legacy.objects : [];
+
+        // Stage 2 stored one shared shotCam instead of per-frame cameras.
+        // Preserve that camera when upgrading to the Stage 5 frame model.
+        const legacyShot = legacy.shotCam || defaultShotCam();
+        const first = defaultFrame('Кадр 1', legacyShot);
+        project.frames = [first];
+        project.currentFrameId = first.id;
+      }else{
+        project = defaultProject();
+      }
+    }catch(e){
+      console.error('FrameLab: project migration/load failed', e);
+      project = defaultProject();
+    }
     if(!project.objects) project.objects = [];
     if(!project.frames) project.frames = [];
     if(!project.guides) project.guides = [];
@@ -886,6 +998,7 @@ const LensModel = (() => {
 const SceneManager = (() => {
   let renderer, scene, editorCamera, orbit, tcontrols;
   let container = null;
+  let resizeToHost = null, hostObserver = null;
   let rootGroup;
   const objectMap = new Map();
   const objectData = new Map();
@@ -924,8 +1037,8 @@ const SceneManager = (() => {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     hostEl.appendChild(renderer.domElement);
 
-    // Запрещаем прокрутку родителя при колесе над канвасом
-    renderer.domElement.addEventListener('wheel', e => e.preventDefault(), { passive:false });
+    // Собственный bounded zoom редакторской камеры.
+    renderer.domElement.addEventListener('wheel', onWheelZoom, { passive:false });
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
@@ -941,9 +1054,9 @@ const SceneManager = (() => {
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.08;
     orbit.screenSpacePanning = true;
-    orbit.enableZoom = true;
-    orbit.zoomSpeed = 1;
-    // Вращение правой кнопкой, панорама средней, ЛКМ — выделение
+    // Колесо обрабатываем сами: так zoom не может увести editorCamera
+    // в нулевую дистанцию/за clipping plane и не ломает viewport.
+    orbit.enableZoom = false;
     orbit.mouseButtons = {
       LEFT: null,
       MIDDLE: THREE.MOUSE.PAN,
@@ -1009,29 +1122,63 @@ const SceneManager = (() => {
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
 
-    const ro = new ResizeObserver(() => {
-      if(!container || !container.clientWidth) return;
+    resizeToHost = () => {
+      if(!container || !container.clientWidth || !container.clientHeight) return;
       const ww = Math.max(2, container.clientWidth);
       const hh = Math.max(2, container.clientHeight);
-      if(renderer.domElement.width !== ww || renderer.domElement.height !== hh){
-        editorCamera.aspect = ww / hh;
-        editorCamera.updateProjectionMatrix();
-        renderer.setSize(ww, hh);
-      }
-    });
-    ro.observe(hostEl);
+      editorCamera.aspect = ww / hh;
+      editorCamera.updateProjectionMatrix();
+      renderer.setSize(ww, hh);
+    };
+    hostObserver = new ResizeObserver(() => resizeToHost());
+    hostObserver.observe(hostEl);
 
     animate();
   }
 
+  // Холст переезжает между контейнерами (сцена / сплит): следим за тем, где он лежит сейчас,
+  // иначе после переноса размер холста остаётся от скрытого контейнера и сцена выглядит пустой.
+  function setHost(hostEl){
+    if(!hostEl || !hostObserver) return;
+    container = hostEl;
+    hostObserver.disconnect();
+    hostObserver.observe(hostEl);
+    resizeToHost && resizeToHost();
+  }
+
   function animate(){
     requestAnimationFrame(animate);
+    // Камера-кадр находится вне rootGroup: никогда не даём ей случайно скрыться.
+    if(camGroup) camGroup.visible = true;
     orbit.update();
     if(flyKeys.size) flyStep();
     rootGroup.rotation.set(
       Utils.rad(sceneRot.rx), Utils.rad(sceneRot.ry), Utils.rad(sceneRot.rz)
     );
     renderer.render(scene, editorCamera);
+  }
+
+  function onWheelZoom(e){
+    e.preventDefault();
+    if(tcontrols?.dragging) return;
+
+    const target = orbit.target;
+    const offset = editorCamera.position.clone().sub(target);
+    let distance = offset.length();
+    if(!Number.isFinite(distance) || distance < 0.05){
+      offset.set(0, 0.001, 1);
+      distance = 1;
+    }
+
+    // Exponential zoom gives predictable behaviour for both mouse wheels
+    // and high-resolution trackpads.
+    const factor = Math.exp(e.deltaY * 0.0012);
+    const next = THREE.MathUtils.clamp(distance * factor, 0.35, 250);
+
+    offset.setLength(next);
+    editorCamera.position.copy(target).add(offset);
+    editorCamera.updateProjectionMatrix();
+    orbit.update();
   }
 
   // WASD-полёт
@@ -1241,6 +1388,10 @@ const SceneManager = (() => {
       applyTransform(data, frame);
       applyColor(data, frame);
     }
+    // Восстанавливаем визуализацию камеры после любой пересборки объектов.
+    // Пирамида живёт вне rootGroup и не должна исчезать при смене/проигрывании кадров.
+    if(frame) updateShotCamViz(FrameAdapter.frameToShot(frame), FrameAdapter.lensOf(frame));
+    if(camGroup) camGroup.visible = true;
     emit('rebuilt');
   }
   function rebuildOne(id, frame){
@@ -1255,6 +1406,8 @@ const SceneManager = (() => {
     applyTransform(data, frame);
     applyColor(data, frame);
     if(selectedId === id) tcontrols.attach(g);
+    if(frame) updateShotCamViz(FrameAdapter.frameToShot(frame), FrameAdapter.lensOf(frame));
+    if(camGroup) camGroup.visible = true;
     emit('rebuiltOne', id);
   }
 
@@ -1319,6 +1472,20 @@ const SceneManager = (() => {
     editorCamera.position.copy(center).add(new THREE.Vector3(dist, dist*0.7, dist));
     orbit.target.copy(center); orbit.update();
   }
+  function resetView(){
+    // Сбрасывается только отображение редактора, не объекты и не камера кадра.
+    editorCamera.position.set(4, 3, 6);
+    orbit.target.set(0, 1, 0);
+    orbit.update();
+    editorCamera.updateProjectionMatrix();
+
+    // Поворот сцены — это тоже только визуальный режим редактора.
+    sceneRot = { rx:0, ry:0, rz:0 };
+    const p = State.get();
+    if(p) p.sceneRotation = { rx:0, ry:0, rz:0 };
+    emit('sceneRotationChanged', sceneRot);
+  }
+
   function setEditorViewPreset(name){
     const box = new THREE.Box3(); objectMap.forEach(g => box.expandByObject(g));
     const center = box.isEmpty() ? new THREE.Vector3(0,1,0) : box.getCenter(new THREE.Vector3());
@@ -1423,10 +1590,10 @@ const SceneManager = (() => {
     getSelectedData, getSelectedId, getCamGroup, getCamPicker,
     setGizmoMode, getGizmoMode, setAxis, getAxis,
     commitTransform, updateTransformFromData, updateColorFromData,
-    updateParamsFromData, rebuild, rebuildOne, fitView, setEditorViewPreset,
+    updateParamsFromData, rebuild, rebuildOne, fitView, resetView, setEditorViewPreset,
     updateShotCamViz, readCamGroupToShot,
     setSceneRotation, getSceneRotation, applySceneRotationFromState,
-    setEditorMode, getEditorMode,
+    setEditorMode, getEditorMode, setHost,
     getRenderInfo(){
       return { objectMap, rootGroup, editorCamera, orbit, renderer, scene };
     }
@@ -1525,61 +1692,175 @@ const FrameAdapter = {
 };
 
 /* ============================================================
+   DollyZoom
+   ============================================================ */
+const DollyZoom = (() => {
+  function solve(frame,focal){
+    const shot=FrameAdapter.frameToShot(frame), target=new THREE.Vector3(...(shot.target||[0,1,0]));
+    const p0=new THREE.Vector3(...shot.pos), dir=target.clone().sub(p0), d=dir.length(), oldF=shot.focalMm;
+    if(d<1e-6||oldF<=0) return null;
+    const d2=d*focal/oldF, p=target.clone().sub(dir.normalize().multiplyScalar(d2));
+    return {pos:[p.x,p.y,p.z],distance:d2,focal};
+  }
+  function sample(frame,f1,f2,t){
+    const out=JSON.parse(JSON.stringify(frame)); out.lens.focalMm=f1;
+    const solved=solve(out,f2); if(!solved)return null;
+    const p1=new THREE.Vector3(...out.camera.pos), p2=new THREE.Vector3(...solved.pos);
+    const u=Math.max(0,Math.min(1,t)), p=p1.lerp(p2,u);
+    out.camera.pos=[p.x,p.y,p.z]; out.lens.focalMm=f1+(f2-f1)*u;
+    return out;
+  }
+  function endpoints(frame,f1,f2){
+    const out=JSON.parse(JSON.stringify(frame)); out.lens.focalMm=f1;
+    const aD=new THREE.Vector3(...out.camera.pos).distanceTo(new THREE.Vector3(...(out.camera.target||[0,1,0])));
+    const b=solve(out,f2); if(!b)return null;
+    return {a:{distance:aD,focal:f1,pos:out.camera.pos.slice()},b:{distance:b.distance,focal:f2,pos:b.pos},scaleRatio:1};
+  }
+  return {solve,sample,endpoints};
+})();
+
+/* ============================================================
+   LensCompare
+   ============================================================ */
+const LensCompare = (() => {
+  let renderer=null;
+  function render(frame){
+    if(!renderer)return;
+    const c=el.lensCompareCanvas, root=SceneManager.getRenderInfo().rootGroup;
+    const vals=[el.cmpF1,el.cmpF2,el.cmpF3,el.cmpF4].map(x=>Utils.clamp(parseFloat(x.value)||50,4,400));
+    const W=c.width,H=c.height; renderer.setScissorTest(true);renderer.clear(true,true,true);
+    vals.forEach((f,i)=>{
+      const col=i%2,row=Math.floor(i/2),x=Math.floor(col*W/2),y=Math.floor((1-row)*H/2),vw=Math.floor(W/2),vh=Math.floor(H/2);
+      const shot=FrameAdapter.frameToShot(frame);shot.focalMm=f;
+      const lens=LensModel.compute({sensor:frame.sensor,aspect:frame.aspect,focalMm:f,aperture:frame.lens.aperture,focusDistM:frame.lens.focusDistM});
+      const cam=CameraRig.apply(shot,lens);
+      renderer.setViewport(x,y,vw,vh);renderer.setScissor(x,y,vw,vh);renderer.render(root,cam);
+    });
+    renderer.setScissorTest(false);
+  }
+  function open(frame){
+    const c=el.lensCompareCanvas,dpr=Math.min(devicePixelRatio||1,2);
+    const w=Math.max(300,c.clientWidth),h=Math.max(220,c.clientHeight);c.width=w*dpr;c.height=h*dpr;
+    if(renderer)renderer.dispose();
+    renderer=new THREE.WebGLRenderer({canvas:c,antialias:true,preserveDrawingBuffer:true});
+    renderer.setPixelRatio(dpr);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.setClearColor(0x000000,1);render(frame);
+  }
+  return {open,render};
+})();
+
+/* ============================================================
    FrameRenderer — отдельный WebGLRenderer для кадра кадра
    Живёт в контейнере кадра напрямую.
    ============================================================ */
 const FrameRenderer = (() => {
   let renderer = null;
-  function ensure(hostEl){
-    if(renderer && renderer.domElement.parentElement === hostEl) return renderer;
-    if(renderer){
-      // Переносим существующий canvas в новый контейнер
-      hostEl.appendChild(renderer.domElement);
+  let hostEl = null;
+  let resizeObserver = null;
+
+  function resizeToHost(){
+    if(!renderer || !hostEl) return;
+    if(hostEl.clientWidth === 0 || hostEl.clientHeight === 0) return;
+    const w = Math.max(2, hostEl.clientWidth);
+    const h = Math.max(2, hostEl.clientHeight);
+    const size = new THREE.Vector2();
+    renderer.getSize(size);
+    if(Math.abs(size.x - w) > 0.5 || Math.abs(size.y - h) > 0.5){
+      renderer.setSize(w, h, false);
+    }
+  }
+
+  function observeHost(nextHost){
+    if(resizeObserver) resizeObserver.disconnect();
+    hostEl = nextHost;
+    resizeObserver = new ResizeObserver(() => resizeToHost());
+    resizeObserver.observe(hostEl);
+    resizeToHost();
+  }
+
+  function ensure(host){
+    if(!host) return null;
+    if(renderer && hostEl !== host){
+      host.appendChild(renderer.domElement);
+      observeHost(host);
       return renderer;
     }
-    renderer = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true, alpha:false });
+    if(renderer) {
+      resizeToHost();
+      return renderer;
+    }
+
+    renderer = new THREE.WebGLRenderer({
+      antialias:true,
+      preserveDrawingBuffer:true,
+      alpha:false
+    });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(Math.max(2, hostEl.clientWidth), Math.max(2, hostEl.clientHeight));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x000000, 1);
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
     renderer.domElement.addEventListener('wheel', e => e.preventDefault(), { passive:false });
-    hostEl.appendChild(renderer.domElement);
-
-    const ro = new ResizeObserver(() => {
-      if(!hostEl.clientWidth) return;
-      renderer.setSize(Math.max(2, hostEl.clientWidth), Math.max(2, hostEl.clientHeight));
-    });
-    ro.observe(hostEl);
+    host.appendChild(renderer.domElement);
+    observeHost(host);
     return renderer;
   }
+
   function get(){ return renderer; }
-  // Возвращает { lens, cam, rect } — где rect в пикселях
+
+  // Рендерим именно rootGroup: без редакторской сетки, осей, гизмо и пирамиды камеры.
+  // Viewport/scissor задаются в логических CSS-пикселях, как требует WebGLRenderer.
   function renderFrame(frame){
-    if(!renderer) return null;
-    const scene = SceneManager.getRenderInfo().scene;
+    if(!renderer || !hostEl) return null;
+
+    resizeToHost();
+
+    const info = SceneManager.getRenderInfo();
+    const rootGroup = info.rootGroup;
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
     const cam = CameraRig.apply(shot, lens);
-    const w = renderer.domElement.width, h = renderer.domElement.height;
-    const aspect = frame.aspect[0]/frame.aspect[1];
+
+    rootGroup.updateMatrixWorld(true);
+
+    const size = renderer.getSize(new THREE.Vector2());
+    const w = Math.max(2, size.x);
+    const h = Math.max(2, size.y);
+    const aspect = frame.aspect[0] / frame.aspect[1];
+
     let fw, fh, fx, fy;
-    if(w/h > aspect){ fh = h; fw = fh * aspect; }
-    else { fw = w; fh = fw / aspect; }
-    fx = (w - fw)/2; fy = (h - fh)/2;
+    if(w / h > aspect){
+      fh = h;
+      fw = fh * aspect;
+    } else {
+      fw = w;
+      fh = fw / aspect;
+    }
+    fx = (w - fw) / 2;
+    fy = (h - fh) / 2;
+
+    const viewportY = h - fy - fh;
     renderer.setScissorTest(true);
-    renderer.setViewport(fx, h - fy - fh, fw, fh);
-    renderer.setScissor(fx, h - fy - fh, fw, fh);
+    renderer.setViewport(fx, viewportY, fw, fh);
+    renderer.setScissor(fx, viewportY, fw, fh);
     renderer.setClearColor(0x000000, 1);
     renderer.clear(true, true, true);
-    renderer.render(scene, cam);
+    renderer.render(rootGroup, cam);
     renderer.setScissorTest(false);
-    return { lens, cam, rect: { fx, fy, fw, fh, w, h } };
+
+    const gl = renderer.getContext();
+    const pixelW = renderer.domElement.width, pixelH = renderer.domElement.height;
+    const pixels = new Uint8Array(pixelW * pixelH * 4);
+    gl.readPixels(0, 0, pixelW, pixelH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    return {
+      lens, cam,
+      rect: { fx: fx * renderer.getPixelRatio(), fy: fy * renderer.getPixelRatio(), fw: fw * renderer.getPixelRatio(), fh: fh * renderer.getPixelRatio(), w: w * renderer.getPixelRatio(), h: h * renderer.getPixelRatio() },
+      pixels, w: pixelW, h: pixelH
+    };
   }
+
   return { ensure, get, renderFrame };
 })();
-
 /* ============================================================
    GridOverlay
    ============================================================ */
@@ -1849,6 +2130,23 @@ const GridOverlay = (() => {
       }
       ctx.restore();
     }
+    if(eo.mainBBox){
+      ctx.save();
+      ctx.strokeStyle = '#ff88ff';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeRect(
+        fx + fw * eo.mainBBox.u0,
+        fy + fh * eo.mainBBox.v0,
+        fw * (eo.mainBBox.u1 - eo.mainBBox.u0),
+        fh * (eo.mainBBox.v1 - eo.mainBBox.v0)
+      );
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ff88ff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('главный', fx + fw * eo.mainBBox.u0, fy + fh * eo.mainBBox.v0 - 4);
+      ctx.restore();
+    }
   }
   function drawGoldenSpiral(g, fx, fy, fw, fh){
     setStroke(g);
@@ -2010,7 +2308,127 @@ const AnalyzerLite = (() => {
   }
   return { compute, horizonV, guessObjectSize };
 })();
-
+/* ============================================================
+   FFT — для spectral residual (Hou & Zhang, 2007)
+   ============================================================ */
+const FFT = (() => {
+  // Radix-2 iterative FFT. real/imag — Float32Array длины N (N = 2^k).
+  function fft1d(real, imag, inverse=false){
+    const n = real.length;
+    // bit-reversal
+    for(let i=1, j=0; i<n; i++){
+      let bit = n >> 1;
+      for(; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if(i < j){
+        [real[i], real[j]] = [real[j], real[i]];
+        [imag[i], imag[j]] = [imag[j], imag[i]];
+      }
+    }
+    // butterflies
+    for(let len = 2; len <= n; len <<= 1){
+      const ang = (inverse ? 2 : -2) * Math.PI / len;
+      const wr = Math.cos(ang), wi = Math.sin(ang);
+      for(let i=0; i<n; i+=len){
+        let cr = 1, ci = 0;
+        for(let k=0; k<len/2; k++){
+          const ur = real[i+k],          ui = imag[i+k];
+          const vr = real[i+k+len/2]*cr - imag[i+k+len/2]*ci;
+          const vi = real[i+k+len/2]*ci + imag[i+k+len/2]*cr;
+          real[i+k]          = ur + vr;
+          imag[i+k]          = ui + vi;
+          real[i+k+len/2]    = ur - vr;
+          imag[i+k+len/2]    = ui - vi;
+          const ncr = cr*wr - ci*wi;
+          ci = cr*wi + ci*wr;
+          cr = ncr;
+        }
+      }
+    }
+    if(inverse){
+      for(let i=0;i<n;i++){ real[i] /= n; imag[i] /= n; }
+    }
+  }
+  // 2D FFT по строкам и столбцам. W и H должны быть степенями двойки.
+  function fft2d(real, imag, W, H, inverse=false){
+    const rowR = new Float32Array(W), rowI = new Float32Array(W);
+    for(let y=0; y<H; y++){
+      for(let x=0; x<W; x++){ rowR[x] = real[y*W+x]; rowI[x] = imag[y*W+x]; }
+      fft1d(rowR, rowI, inverse);
+      for(let x=0; x<W; x++){ real[y*W+x] = rowR[x]; imag[y*W+x] = rowI[x]; }
+    }
+    const colR = new Float32Array(H), colI = new Float32Array(H);
+    for(let x=0; x<W; x++){
+      for(let y=0; y<H; y++){ colR[y] = real[y*W+x]; colI[y] = imag[y*W+x]; }
+      fft1d(colR, colI, inverse);
+      for(let y=0; y<H; y++){ real[y*W+x] = colR[y]; imag[y*W+x] = colI[y]; }
+    }
+  }
+  // Быстрое размытие через box-blur (для log-амплитуды и saliency достаточно).
+  function boxBlur(src, W, H, radius){
+    const tmp = new Float32Array(src.length);
+    const out = new Float32Array(src.length);
+    // горизонтальный проход
+    for(let y=0; y<H; y++){
+      let sum = 0, count = 0;
+      for(let x=-radius; x<=radius; x++){
+        const xx = Math.max(0, Math.min(W-1, x));
+        sum += src[y*W + xx]; count++;
+      }
+      for(let x=0; x<W; x++){
+        tmp[y*W + x] = sum / count;
+        const xOut = Math.max(0, Math.min(W-1, x - radius));
+        const xIn  = Math.max(0, Math.min(W-1, x + radius + 1));
+        sum += src[y*W + xIn] - src[y*W + xOut];
+      }
+    }
+    // вертикальный проход
+    for(let x=0; x<W; x++){
+      let sum = 0, count = 0;
+      for(let y=-radius; y<=radius; y++){
+        const yy = Math.max(0, Math.min(H-1, y));
+        sum += tmp[yy*W + x]; count++;
+      }
+      for(let y=0; y<H; y++){
+        out[y*W + x] = sum / count;
+        const yOut = Math.max(0, Math.min(H-1, y - radius));
+        const yIn  = Math.max(0, Math.min(H-1, y + radius + 1));
+        sum += tmp[yIn*W + x] - tmp[yOut*W + x];
+      }
+    }
+    return out;
+  }
+  // Spectral residual: серое изображение → карта saliency.
+  // gray — Float32Array длины W*H со значениями 0..1.
+  function spectralResidual(gray, W, H){
+    const real = new Float32Array(gray);
+    const imag = new Float32Array(gray.length);
+    fft2d(real, imag, W, H, false);
+    const logAmp = new Float32Array(gray.length);
+    for(let i=0;i<gray.length;i++){
+      logAmp[i] = Math.log(Math.hypot(real[i], imag[i]) + 1e-6);
+    }
+    const smoothed = boxBlur(logAmp, W, H, 3);
+    const residual = new Float32Array(gray.length);
+    for(let i=0;i<gray.length;i++) residual[i] = logAmp[i] - smoothed[i];
+    for(let i=0;i<gray.length;i++){
+      const a = Math.exp(residual[i]);
+      const phase = Math.atan2(imag[i], real[i]);
+      real[i] = a * Math.cos(phase);
+      imag[i] = a * Math.sin(phase);
+    }
+    fft2d(real, imag, W, H, true);
+    const sal = new Float32Array(gray.length);
+    for(let i=0;i<gray.length;i++) sal[i] = real[i]*real[i] + imag[i]*imag[i];
+    const blurred = boxBlur(sal, W, H, 2);
+    // нормализация 0..1
+    let maxV = 0;
+    for(let i=0;i<blurred.length;i++) if(blurred[i] > maxV) maxV = blurred[i];
+    if(maxV > 0) for(let i=0;i<blurred.length;i++) blurred[i] /= maxV;
+    return blurred;
+  }
+  return { fft1d, fft2d, boxBlur, spectralResidual };
+})();
 /* ============================================================
    Evaluator — оценка кадра по разделу 9
    ============================================================ */
@@ -2039,66 +2457,126 @@ const Evaluator = (() => {
   // Для демо возьмём центральный bias и веса видимых объектов, плюс
   // детектор ярких пятен на маленькой копии. Здесь не делаем FFT
   // (полноценная FFT — этап 6), а строим композитный saliency-эскиз.
-  function buildSaliencySketch(frame, lens, cam, W=64, H=null){
-    // Небольшая «карта внимания» по проекциям объектов + центр-bias
-    if(!H) H = Math.max(2, Math.round(W * frame.aspect[1] / frame.aspect[0]));
-    const map = new Float32Array(W * H);
-    // центр-bias
-    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-      const u = x/(W-1), v = y/(H-1);
-      const dx = u - 0.5, dy = v - 0.5;
-      map[y*W + x] += 0.2 * Math.exp(-(dx*dx + dy*dy) / (2*0.3*0.3));
-    }
-    // объекты: центр масс + роль
-    const total = { u:0, v:0, w:0 };
-    const project = new THREE.Vector3();
-    const root = SceneManager.getRenderInfo().rootGroup;
-    for(const obj of State.get().objects){
-      const ov = frame.overrides?.[obj.id] || {};
-      const visible = ov.visible !== undefined ? ov.visible : obj.visible;
-      if(visible === false) continue;
-      const eff = { transform: ov.transform ? {...obj.transform, ...ov.transform} : obj.transform,
-                    color: ov.color ? {...obj.color, ...ov.color} : obj.color };
-      const center = new THREE.Vector3(...eff.transform.pos);
-      const size = AnalyzerLite.guessObjectSize(obj);
-      const corners = [
-        [ -size.x/2, -size.y/2, -size.z/2 ], [ size.x/2, -size.y/2, -size.z/2 ],
-        [ -size.x/2,  size.y/2, -size.z/2 ], [ size.x/2,  size.y/2, -size.z/2 ],
-        [ -size.x/2, -size.y/2,  size.z/2 ], [ size.x/2, -size.y/2,  size.z/2 ],
-        [ -size.x/2,  size.y/2,  size.z/2 ], [ size.x/2,  size.y/2,  size.z/2 ]
-      ].map(([dx,dy,dz]) => new THREE.Vector3(center.x+dx, center.y+dy, center.z+dz)
-        .applyMatrix4(root.matrixWorld));
-      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-      for(const c of corners){
-        project.copy(c).project(cam);
-        const u = (project.x + 1)/2;
-        const v = (1 - project.y)/2;
-        if(u < uMin) uMin = u; if(u > uMax) uMax = u;
-        if(v < vMin) vMin = v; if(v > vMax) vMax = v;
-      }
-      const u0 = Math.max(0, uMin), u1 = Math.min(1, uMax);
-      const v0 = Math.max(0, vMin), v1 = Math.min(1, vMax);
-      if(u1 <= u0 || v1 <= v0) continue;
-      const roleW = obj.role === 'main' ? 3.0 : obj.role === 'secondary' ? 2.0 : obj.role === 'background' ? 1.0 : 0.5;
-      const colorW = 1 + 0.4 * (eff.color.r/255) + 0.2 * (eff.color.g/255);
-      const w = roleW * colorW * ((u1-u0)*(v1-v0)) * 20;
-      // Рисуем «пятно» в карте
-      const cu = (u0+u1)/2, cv = (v0+v1)/2;
-      const rx = (u1-u0)/2 + 0.05, ry = (v1-v0)/2 + 0.05;
-      for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-        const u = x/(W-1), v = y/(H-1);
-        const du = (u - cu)/rx, dv = (v - cv)/ry;
-        const dd = du*du + dv*dv;
-        if(dd < 4){
-          map[y*W + x] += w * Math.exp(-dd);
+ 
+  function fft1d(r,i,inv=false){
+    const n=r.length, power2=(n & (n-1))===0;
+    if(!power2){
+      const or=r.slice(),oi=i.slice(),sign=inv?1:-1;
+      for(let k=0;k<n;k++){
+        let sr=0,si=0;
+        for(let x=0;x<n;x++){
+          const a=sign*2*Math.PI*k*x/n,cr=Math.cos(a),ci=Math.sin(a);
+          sr+=or[x]*cr-oi[x]*ci; si+=or[x]*ci+oi[x]*cr;
         }
+        r[k]=inv?sr/n:sr; i[k]=inv?si/n:si;
       }
-      total.u += cu * w; total.v += cv * w; total.w += w;
+      return;
     }
-    const centroid = total.w > 0 ? { u: total.u/total.w, v: total.v/total.w } : { u: 0.5, v: 0.5 };
-    return { map, W, H, centroid };
+    for(let x=1,j=0;x<n;x++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;if(x<j){let t=r[x];r[x]=r[j];r[j]=t;t=i[x];i[x]=i[j];i[j]=t;}}
+    for(let l=2;l<=n;l<<=1){const a=(inv?2:-2)*Math.PI/l,cr=Math.cos(a),ci=Math.sin(a);for(let x=0;x<n;x+=l){let wr=1,wi=0;for(let j=0;j<l/2;j++){const ur=r[x+j],ui=i[x+j],vr=r[x+j+l/2]*wr-i[x+j+l/2]*wi,vi=r[x+j+l/2]*wi+i[x+j+l/2]*wr;r[x+j]=ur+vr;i[x+j]=ui+vi;r[x+j+l/2]=ur-vr;i[x+j+l/2]=ui-vi;const nw=wr*cr-wi*ci;wi=wr*ci+wi*cr;wr=nw;}}}
+    if(inv)for(let x=0;x<n;x++){r[x]/=n;i[x]/=n;}
+  }
+  function fft2d(r,i,w,h,inv=false){const a=new Float32Array(w),b=new Float32Array(w);for(let y=0;y<h;y++){for(let x=0;x<w;x++){a[x]=r[y*w+x];b[x]=i[y*w+x];}fft1d(a,b,inv);for(let x=0;x<w;x++){r[y*w+x]=a[x];i[y*w+x]=b[x];}}const c=new Float32Array(h),d=new Float32Array(h);for(let x=0;x<w;x++){for(let y=0;y<h;y++){c[y]=r[y*w+x];d[y]=i[y*w+x];}fft1d(c,d,inv);for(let y=0;y<h;y++){r[y*w+x]=c[y];i[y*w+x]=d[y];}}}
+  function gaussianBlur1D(a,w,h,s){const rad=Math.max(1,Math.ceil(3*s)),k=new Float32Array(rad*2+1);let z=0;for(let q=-rad;q<=rad;q++){k[q+rad]=Math.exp(-q*q/(2*s*s));z+=k[q+rad];}for(let q=0;q<k.length;q++)k[q]/=z;const t=new Float32Array(a.length),o=new Float32Array(a.length);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=0;for(let q=-rad;q<=rad;q++)v+=a[y*w+Math.min(w-1,Math.max(0,x+q))]*k[q+rad];t[y*w+x]=v;}for(let y=0;y<h;y++)for(let x=0;x<w;x++){let v=0;for(let q=-rad;q<=rad;q++)v+=t[Math.min(h-1,Math.max(0,y+q))*w+x]*k[q+rad];o[y*w+x]=v;}return o;}
+  function spectralResidual(g,w,h){const r=new Float32Array(g),i=new Float32Array(g.length);fft2d(r,i,w,h);const l=new Float32Array(g.length);for(let x=0;x<g.length;x++)l[x]=Math.log(Math.hypot(r[x],i[x])+1e-6);const sm=gaussianBlur1D(l,w,h,3),res=new Float32Array(g.length);for(let x=0;x<g.length;x++){res[x]=l[x]-sm[x];const p=Math.atan2(i[x],r[x]),amp=Math.exp(res[x]);r[x]=amp*Math.cos(p);i[x]=amp*Math.sin(p);}fft2d(r,i,w,h,true);const s=new Float32Array(g.length);for(let x=0;x<g.length;x++)s[x]=r[x]*r[x]+i[x]*i[x];return gaussianBlur1D(s,w,h,2);}
+  function renderSaliencyGray(frame,lens,cam,w,h){const r=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});r.setPixelRatio(1);r.setSize(w,h,false);r.setClearColor(0);const root=SceneManager.getRenderInfo().rootGroup;root.updateMatrixWorld(true);r.render(root,cam);const gl=r.getContext(),p=new Uint8Array(w*h*4);gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,p);r.dispose();const g=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const q=((h-1-y)*w+x)*4;g[y*w+x]=.2126*p[q]+.7152*p[q+1]+.0722*p[q+2];}return g;}
+  // Карта внимания по spectral residual (Hou & Zhang, 2007).
+  // Если доступен рендер кадра — берём его; иначе — эвристика по объектам.
+  let saliencyRenderer = null;
+  let saliencyCanvas = null;
+
+  function getSaliencyRenderer(W, H){
+    if(!saliencyCanvas){
+      saliencyCanvas = document.createElement('canvas');
+      saliencyRenderer = new THREE.WebGLRenderer({ antialias:false, preserveDrawingBuffer:true, alpha:false, canvas:saliencyCanvas });
+      saliencyRenderer.setPixelRatio(1);
+      saliencyRenderer.outputColorSpace = THREE.SRGBColorSpace;
+      saliencyRenderer.setClearColor(0x000000, 1);
+    }
+    saliencyRenderer.setSize(W, H, false);
+    return saliencyRenderer;
   }
 
+  function buildSaliencySketch(frame, lens, cam, W=64, H=null){
+    if(!H) H = Math.max(2, Math.round(W * frame.aspect[1] / frame.aspect[0]));
+    // Приводим W,H к степеням двойки (для radix-2 FFT)
+    const W2 = 1 << Math.round(Math.log2(W));
+    const H2 = 1 << Math.round(Math.log2(H));
+    const gray = new Float32Array(W2 * H2);
+
+    // Попытка честного saliency: рендерим кадр в маленький offscreen
+    let gotPixels = false;
+    try{
+      const root = SceneManager.getRenderInfo().rootGroup;
+      if(root){
+        const r = getSaliencyRenderer(W2, H2);
+        r.render(root, cam);
+        const gl = r.getContext();
+        const pixels = new Uint8Array(W2 * H2 * 4);
+        gl.readPixels(0, 0, W2, H2, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        // Один переиспользуемый WebGL-контекст: не создаём/уничтожаем renderer
+        // для каждого кандидата автоулучшения — иначе браузер может потерять
+        // WebGL-контекст и дать белый экран после нескольких проверок.
+        // WebGL origin — левый нижний; переворачиваем по Y.
+        for(let y=0; y<H2; y++){
+          for(let x=0; x<W2; x++){
+            const sy = H2 - 1 - y;
+            const idx = (sy * W2 + x) * 4;
+            const r0 = pixels[idx]/255, g0 = pixels[idx+1]/255, b0 = pixels[idx+2]/255;
+            gray[y*W2 + x] = 0.2126*r0 + 0.7152*g0 + 0.0722*b0;
+          }
+        }
+        gotPixels = true;
+      }
+    }catch(e){ /* fall through to heuristic */ }
+
+    if(!gotPixels){
+      // Эвристика: центр-bias + bbox объектов (для случаев без GPU)
+      for(let y=0;y<H2;y++) for(let x=0;x<W2;x++){
+        const u = x/(W2-1), v = y/(H2-1);
+        const dx = u - 0.5, dy = v - 0.5;
+        gray[y*W2 + x] = 0.5 + 0.5 * Math.exp(-(dx*dx + dy*dy) / (2*0.3*0.3));
+      }
+    }
+
+    const sal = FFT.spectralResidual(gray, W2, H2);
+    // Center-bias: усиливаем центр
+    for(let y=0;y<H2;y++) for(let x=0;x<W2;x++){
+      const u = x/(W2-1), v = y/(H2-1);
+      const dx = u - 0.5, dy = v - 0.5;
+      const bias = 0.6 + 0.4 * Math.exp(-(dx*dx + dy*dy) / (2*0.4*0.4));
+      sal[y*W2 + x] *= bias;
+    }
+
+    // Центроид saliency
+    let su = 0, sv = 0, sw = 0;
+    for(let y=0;y<H2;y++) for(let x=0;x<W2;x++){
+      const w = sal[y*W2 + x];
+      su += (x/(W2-1)) * w;
+      sv += (y/(H2-1)) * w;
+      sw += w;
+    }
+    const centroid = sw > 0 ? { u: su/sw, v: sv/sw } : { u:0.5, v:0.5 };
+
+    // Готовим heatData для оверлея (топ-12 пиков)
+    const peaks = [];
+    for(let y=2; y<H2-2; y+=2) for(let x=2; x<W2-2; x+=2){
+      const v = sal[y*W2 + x];
+      if(v > 0.5){
+        // локальный максимум
+        let isMax = true;
+        for(let dy=-2; dy<=2 && isMax; dy+=2) for(let dx=-2; dx<=2; dx+=2){
+          if(dx===0 && dy===0) continue;
+          if(sal[(y+dy)*W2 + (x+dx)] > v){ isMax = false; break; }
+        }
+        if(isMax) peaks.push({ u: x/(W2-1), v: y/(H2-1), w: v, r: 0.10 + 0.10*v });
+      }
+    }
+    peaks.sort((a,b) => b.w - a.w);
+    const heatDataForOverlay = peaks.slice(0, 12);
+
+    return { map: sal, W: W2, H: H2, centroid, heatDataForOverlay };
+  }
   function s_focus(saliency, mainObjBBox){
     if(!mainObjBBox) return { s: 0.5, why: 'Нет главного объекта' };
     // Доля массы внимания внутри bbox главного объекта
@@ -2116,16 +2594,25 @@ const Evaluator = (() => {
     return { s, frac };
   }
 
+    // S_clarity = 1 - энтропия(saliency) / энтропия(равномерная)
   function s_clarity(saliency){
-    const { map } = saliency;
-    let sum = 0, sumSq = 0, n = map.length;
-    for(let i=0;i<n;i++){ sum += map[i]; sumSq += map[i]*map[i]; }
-    const mean = sum/n;
-    const varv = sumSq/n - mean*mean;
-    // Нормализуем дисперсию
-    const peak = varv / ((mean*mean) + 1e-6); // коэффициент вариации
-    const s = Utils.clamp(peak / 2.0, 0, 1);
-    return { s, peak };
+    const { map, W, H } = saliency;
+    const n = map.length;
+    let sum = 0;
+    for(let i=0;i<n;i++) sum += map[i];
+    if(sum <= 1e-9) return { s: 0.5, entropy: 1, uniform: 1 };
+    // Нормируем в вероятности
+    const p = new Float32Array(n);
+    for(let i=0;i<n;i++) p[i] = map[i] / sum;
+    // Энтропия Шеннона (в битах)
+    let H_ent = 0;
+    for(let i=0;i<n;i++){
+      if(p[i] > 1e-9) H_ent -= p[i] * Math.log2(p[i]);
+    }
+    const uniform = Math.log2(n);
+    const s = Utils.clamp(1 - H_ent / uniform, 0, 1);
+    void W; void H;
+    return { s, entropy: H_ent, uniform };
   }
 
   function s_edges(frame, lens, cam){
@@ -2298,11 +2785,6 @@ const Evaluator = (() => {
         why: `Доля внимания на главном объекте: ${(focus.frac*100).toFixed(0)}%.`,
         act: focus.s < 0.6 ? 'Усилить контраст или изоляцию главного объекта.' : null
       },
-      { id:'clarity', name:'Ясность фокуса',
-        s: clarity.s,
-        why: `Пиковость карты внимания: ${clarity.peak.toFixed(2)}.`,
-        act: clarity.s < 0.4 ? 'Разгруппировать второстепенные пятна внимания.' : null
-      },
       { id:'edges', name:'Края и обрезки',
         s: edges.s,
         why: edges.touches.length
@@ -2321,10 +2803,10 @@ const Evaluator = (() => {
 
     // Веса профилей
     const WEIGHTS = {
+      // Этап 5: только реально реализованные критерии.
+      // Дополнительные критерии этапа 6 не участвуют в этой оценке.
       classic: {
-        thirds: 0.22, balance: 0.15, focus: 0.15, clarity: 0.05,
-        edges: 0.10, horizon: 0.10, // остальное — на будущее
-        // Общая сумма должна давать ~0.77; нормируем динамически ниже
+        thirds: 0.30, balance: 0.20, focus: 0.20, edges: 0.15, horizon: 0.15
       },
       free: {}
     };
@@ -2332,7 +2814,7 @@ const Evaluator = (() => {
     // Для "free" — равные веса
     let sumW = 0, sum = 0;
     for(const c of criteria){
-      const cw = (profileName === 'free' || !w[c.id]) ? 1 : w[c.id];
+      const cw = (profileName === 'free') ? 1 : (w[c.id] ?? 0);
       sum += c.s * cw;
       sumW += cw;
     }
@@ -2341,11 +2823,12 @@ const Evaluator = (() => {
     // Оверлеи
     const evalOverlay = {
       thirds: true,
-      heatmapData: saliency && saliency.heatDataForOverlay ? saliency.heatDataForOverlay : null,
+      heatmapData: saliency.heatDataForOverlay || null,
       nearestThird: thirds.nearest ? { u: thirds.nearest[0], v: thirds.nearest[1] } : null,
       edges: edges.touches,
       horizonV: horizon.vH,
-      horizonGood: horizon.sLine > 0.7
+      horizonGood: horizon.sLine > 0.7,
+      mainBBox: mainBBox ? { u0: mainBBox.u0, u1: mainBBox.u1, v0: mainBBox.v0, v1: mainBBox.v1 } : null
     };
 
     return {
@@ -2357,7 +2840,172 @@ const Evaluator = (() => {
     };
   }
 
-  return { evaluate };
+  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus } };
+})();
+
+/* ============================================================
+   EvaluatorV2 — этап 6: расширенные критерии + профили
+   ============================================================ */
+const EvaluatorV2 = (() => {
+  const clamp = (v,a=0,b=1) => Math.max(a,Math.min(b,v));
+  const gauss = (d,s) => Math.exp(-(d*d)/(2*s*s));
+
+  function mainBBox(frame){
+    const lens = FrameAdapter.lensOf(frame);
+    const cam = CameraRig.apply(FrameAdapter.frameToShot(frame), lens);
+    const id = frame.camera?.mainObjId;
+    const objs = State.get().objects || [];
+    let main = id ? objs.find(o=>o.id===id) : null;
+    if(!main) main = objs.find(o=>o.role==='main') || objs.find(o=>o.role==='secondary');
+    if(!main) return null;
+    const ov = frame.overrides?.[main.id] || {};
+    const tr = { ...(main.transform||{}), ...(ov.transform||{}) };
+    const size = AnalyzerLite.guessObjectSize(main);
+    const root = SceneManager.getRenderInfo().rootGroup;
+    const center = new THREE.Vector3(...(tr.pos||[0,0,0]));
+    const corners=[];
+    for(const [sx,sy,sz] of [[-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],[-1,-1,1],[1,-1,1],[-1,1,1],[1,1,1]]){
+      corners.push(new THREE.Vector3(
+        center.x+sx*size.x/2, center.y+sy*size.y/2, center.z+sz*size.z/2
+      ).applyMatrix4(root.matrixWorld).project(cam));
+    }
+    let u0=Infinity,u1=-Infinity,v0=Infinity,v1=-Infinity;
+    for(const p of corners){
+      const u=(p.x+1)/2, v=(1-p.y)/2;
+      u0=Math.min(u0,u); u1=Math.max(u1,u); v0=Math.min(v0,v); v1=Math.max(v1,v);
+    }
+    return {u0,u1,v0,v1,u:(u0+u1)/2,v:(v0+v1)/2,w:u1-u0,h:v1-v0,area:Math.max(0,(u1-u0)*(v1-v0)),main};
+  }
+
+  function visibleObjects(){
+    return (State.get().objects||[]).filter(o=>o.role!=='guide' && o.visible!==false);
+  }
+
+  function colorHarmony(){
+    const objs=visibleObjects();
+    if(objs.length<2) return 0.75;
+    const hues=[];
+    for(const o of objs){
+      const c=o.color||{r:128,g:128,b:128};
+      const mx=Math.max(c.r,c.g,c.b), mn=Math.min(c.r,c.g,c.b), d=mx-mn;
+      if(d<8) continue;
+      let h=0;
+      if(mx===c.r) h=((c.g-c.b)/d)%6;
+      else if(mx===c.g) h=(c.b-c.r)/d+2;
+      else h=(c.r-c.g)/d+4;
+      h=(h/6+1)%1; hues.push(h);
+    }
+    if(hues.length<2) return 0.7;
+    let sum=0;
+    for(let i=0;i<hues.length;i++) for(let j=i+1;j<hues.length;j++){
+      const d=Math.min(Math.abs(hues[i]-hues[j]),1-Math.abs(hues[i]-hues[j]));
+      sum+=d;
+    }
+    const avg=sum/(hues.length*(hues.length-1)/2);
+    return clamp(1-avg/0.5);
+  }
+
+  function evaluate(frame,profileName='classic'){
+    const base=Evaluator.evaluate(frame,'classic');
+    const b=mainBBox(frame);
+    const safeB=b || {u:.5,v:.5,w:.25,h:.25,area:.0625,u0:.375,u1:.625,v0:.375,v1:.625};
+    const cx=safeB.u, cy=safeB.v;
+
+    const goldenPts=[[0.382,0.382],[0.618,0.382],[0.382,0.618],[0.618,0.618]];
+    const golden=Math.max(...goldenPts.map(([u,v])=>gauss(Math.hypot(cx-u,cy-v),0.18)));
+    const diagonal=Math.max(gauss(Math.abs(cy-cx),0.16),gauss(Math.abs(cy-(1-cx)),0.16));
+    const leadSide = cx<0.5 ? 1-cx : cx;
+    const leadRoom=clamp((leadSide-0.20)/0.55);
+    const headroom=gauss(Math.abs(safeB.v0-0.16),0.12);
+    const shotScale=gauss(Math.log(Math.max(0.004,safeB.area)/0.18),0.8);
+    const negative=gauss(Math.log(Math.max(0.004,1-safeB.area)/0.82),0.7);
+    const simplicity=clamp(1-Math.max(0,visibleObjects().length-3)*0.14);
+    const symmetry=gauss(Math.abs(cx-0.5),0.18);
+    const tilt=gauss(Math.abs(frame.camera?.roll||0),5);
+    const color=colorHarmony();
+
+    const extra=[
+      {id:'golden',name:'Золотое сечение',s:golden,why:'Главный объект сравнен с золотыми точками.',act:golden<0.55?'Сместить главный объект ближе к золотой зоне.':null},
+      {id:'diagonal',name:'Диагональная композиция',s:diagonal,why:'Положение главного объекта относительно диагоналей кадра.',act:diagonal<0.5?'Попробовать диагональное размещение или изменить камеру.':null},
+      {id:'lead',name:'Lead room',s:leadRoom,why:'Свободное пространство по направлению кадра: '+(leadSide*100).toFixed(0)+'%.',act:leadRoom<0.55?'Оставить больше пространства перед объектом.':null},
+      {id:'headroom',name:'Headroom',s:headroom,why:'Верхняя граница главного объекта: '+(safeB.v0*100).toFixed(0)+'% кадра.',act:headroom<0.55?'Дать объекту больше воздуха сверху.':null},
+      {id:'color',name:'Цветовая гармония',s:color,why:'Сравнение цветовых оттенков видимых объектов.',act:color<0.55?'Снизить конфликтующие оттенки.':null},
+      {id:'simplicity',name:'Простота',s:simplicity,why:'В кадре '+visibleObjects().length+' видимых объектов.',act:simplicity<0.7?'Убрать второстепенные объекты или упростить кадр.':null},
+      {id:'negative',name:'Негативное пространство',s:negative,why:'Свободная площадь вокруг главного объекта: '+((1-safeB.area)*100).toFixed(0)+'%.',act:negative<0.55?'Увеличить чистое пространство вокруг объекта.':null},
+      {id:'shotScale',name:'Масштаб плана',s:shotScale,why:'Площадь главного объекта ≈ '+(safeB.area*100).toFixed(1)+'% кадра.',act:shotScale<0.55?'Изменить дистанцию или фокусное расстояние.':null},
+      {id:'symmetry',name:'Симметрия',s:symmetry,why:'Отклонение центра объекта от оси: '+Math.abs(cx-0.5).toFixed(2)+'.',act:symmetry<0.55?'Для симметричного варианта выровнять объект по центру.':null},
+      {id:'tilt',name:'Наклон / Dutch angle',s:tilt,why:'Roll камеры: '+(frame.camera?.roll||0).toFixed(1)+'°.',act:tilt<0.55?'Выровнять камеру, если наклон не является приёмом.':null}
+    ];
+
+    const weights={
+      classic:{thirds:.20,balance:.12,focus:.12,edges:.09,horizon:.08,golden:.10,diagonal:.07,lead:.07,headroom:.05,color:.03,simplicity:.03,negative:.02,shotScale:.02,symmetry:0,tilt:0},
+      dynamic:{thirds:.10,balance:.08,focus:.12,edges:.06,horizon:.04,golden:.08,diagonal:.16,lead:.14,headroom:.05,color:.05,simplicity:.03,negative:.04,shotScale:.03,symmetry:0,tilt:.02},
+      symmetry:{thirds:.05,balance:.08,focus:.10,edges:.08,horizon:.08,golden:.05,diagonal:.02,lead:.02,headroom:.05,color:.03,simplicity:.05,negative:.05,shotScale:.04,symmetry:.30,tilt:.10},
+      minimalism:{thirds:.08,balance:.08,focus:.10,edges:.08,horizon:.05,golden:.05,diagonal:.03,lead:.03,headroom:.05,color:.05,simplicity:.20,negative:.15,shotScale:.08,symmetry:.05,tilt:0},
+      portrait:{thirds:.14,balance:.10,focus:.20,edges:.08,horizon:.04,golden:.08,diagonal:.04,lead:.08,headroom:.08,color:.04,simplicity:.04,negative:.03,shotScale:.08,symmetry:.03,tilt:.02},
+      landscape:{thirds:.12,balance:.12,focus:.10,edges:.08,horizon:.16,golden:.08,diagonal:.06,lead:.05,headroom:.03,color:.08,simplicity:.05,negative:.07,shotScale:.03,symmetry:.02,tilt:.03},
+      vertical:{thirds:.15,balance:.10,focus:.15,edges:.08,horizon:.05,golden:.08,diagonal:.08,lead:.08,headroom:.08,color:.05,simplicity:.05,negative:.06,shotScale:.05,symmetry:.02,tilt:0},
+      cinematic:{thirds:.14,balance:.10,focus:.14,edges:.08,horizon:.08,golden:.10,diagonal:.08,lead:.10,headroom:.06,color:.06,simplicity:.04,negative:.06,shotScale:.02,symmetry:0,tilt:.02},
+      free:null
+    };
+    const all=[...base.criteria,...extra];
+    const w=weights[profileName];
+    let total;
+    if(!w) total=all.reduce((a,c)=>a+c.s,0)/all.length;
+    else {
+      let sum=0,sw=0;
+      for(const c of all){const cw=w[c.id]||0;sum+=c.s*cw;sw+=cw;}
+      total=sw?sum/sw:0;
+    }
+    return {profile:profileName,total,criteria:all,base,mainBBox:safeB,timestamp:Date.now()};
+  }
+
+  return {evaluate, profiles:['classic','dynamic','symmetry','minimalism','portrait','landscape','vertical','cinematic','free']};
+})();
+
+/* ============================================================
+   ImproveEngine — этап 6: candidate search, before/after, Apply/Reject
+   ============================================================ */
+const ImproveEngine = (() => {
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  function cloneFrame(f){ return JSON.parse(JSON.stringify(f)); }
+
+  function candidates(frame){
+    const f0=cloneFrame(frame), out=[];
+    const add=(label,mutate,kind)=>{const f=cloneFrame(f0);mutate(f);out.push({label,kind,frame:f});};
+    [-0.35,0.35].forEach(v=>add('Камера X '+(v>0?'+':'')+v.toFixed(2)+' м',f=>f.camera.pos[0]+=v,'camera'));
+    [-0.20,0.20].forEach(v=>add('Камера Y '+(v>0?'+':'')+v.toFixed(2)+' м',f=>f.camera.pos[1]=clamp(f.camera.pos[1]+v,-20,20),'camera'));
+    [-4,4].forEach(v=>add('Yaw '+(v>0?'+':'')+v+'°',f=>f.camera.yaw+=v,'camera'));
+    [-3,3].forEach(v=>add('Pitch '+(v>0?'+':'')+v+'°',f=>f.camera.pitch+=v,'camera'));
+    [-3,3].forEach(v=>add('Roll '+(v>0?'+':'')+v+'°',f=>f.camera.roll=clamp(f.camera.roll+v,-45,45),'camera'));
+    [0.92,1.08].forEach(k=>add('Фокусное ×'+k.toFixed(2),f=>f.lens.focalMm=clamp(f.lens.focalMm*k,14,300),'lens'));
+    return out;
+  }
+
+  function improve(frame,profile){
+    const before=EvaluatorV2.evaluate(frame,profile);
+    const pool=candidates(frame);
+    let best=null;
+    for(const c of pool){
+      const r=EvaluatorV2.evaluate(c.frame,profile);
+      if(!best || r.total>best.result.total) best={...c,result:r};
+    }
+    if(!best || best.result.total<=before.total+0.002) return {changed:false,before,best:null,checked:pool.length};
+    return {changed:true,before,best,checked:pool.length};
+  }
+
+  function apply(result){
+    if(!result?.changed || !result.best) return false;
+    const current=State.currentFrame();
+    State.History.tx(()=>{
+      current.camera=JSON.parse(JSON.stringify(result.best.frame.camera));
+      current.lens=JSON.parse(JSON.stringify(result.best.frame.lens));
+    });
+    State.save();
+    return true;
+  }
+
+  return {improve,apply};
 })();
 
 /* ============================================================
@@ -2405,10 +3053,21 @@ const UI = (() => {
       infoCrop: document.getElementById('infoCrop'), infoEqF: document.getElementById('infoEqF'),
       infoWork: document.getElementById('infoWork'), infoH: document.getElementById('infoH'),
       infoDof: document.getElementById('infoDof'),
+      btnImprove: document.getElementById('btnImprove'),
+      improveBox: document.getElementById('improveBox'),
+      btnLensCompare: document.getElementById('btnLensCompare'),
+      dollyF1: document.getElementById('dollyF1'), dollyF2: document.getElementById('dollyF2'),
+      dollyT: document.getElementById('dollyT'), dollyTVal: document.getElementById('dollyTVal'),
+      dollyDist: document.getElementById('dollyDist'), dollyScaleCheck: document.getElementById('dollyScaleCheck'),
+      btnDollyApply: document.getElementById('btnDollyApply'), btnDollyReset: document.getElementById('btnDollyReset'),
+      lensCompareModal: document.getElementById('lensCompareModal'), lensCompareClose: document.getElementById('lensCompareClose'),
+      lensCompareCanvas: document.getElementById('lensCompareCanvas'),
+      cmpF1: document.getElementById('cmpF1'), cmpF2: document.getElementById('cmpF2'), cmpF3: document.getElementById('cmpF3'), cmpF4: document.getElementById('cmpF4'), cmpRender: document.getElementById('cmpRender'),
       hudFrame: document.getElementById('hudFrame'),
       hudFov: document.getElementById('hudFov'), hudF: document.getElementById('hudF'),
       hudMode: document.getElementById('hudMode'), edModeLabel: document.getElementById('edModeLabel'),
       hudScore: document.getElementById('hudScore'),
+      pip: document.getElementById('pip'),
       viewScene: document.getElementById('viewScene'),
       viewSplit: document.getElementById('viewSplit'),
       viewFrame: document.getElementById('viewFrame'),
@@ -2441,6 +3100,7 @@ const UI = (() => {
       camTargetSel: document.getElementById('camTargetSel'),
       camModeFree: document.getElementById('camModeFree'),
       camModeLookAt: document.getElementById('camModeLookAt'),
+      btnCamReset: document.getElementById('btnCamReset'),
       // scene rot
       sceneRx: document.getElementById('sceneRx'), sceneRy: document.getElementById('sceneRy'), sceneRz: document.getElementById('sceneRz'),
       sceneRxN: document.getElementById('sceneRxN'), sceneRyN: document.getElementById('sceneRyN'), sceneRzN: document.getElementById('sceneRzN'),
@@ -2538,12 +3198,10 @@ const UI = (() => {
     document.getElementById('edModeScene').addEventListener('click', () => setEditorMode('scene'));
     document.getElementById('edModeFly').addEventListener('click', () => setEditorMode('fly'));
     document.getElementById('btnSceneReset').addEventListener('click', () => {
-      State.History.tx(() => { State.get().sceneRotation = { rx:0, ry:0, rz:0 }; });
-      SceneManager.applySceneRotationFromState();
+      SceneManager.resetView();
       State.save();
       updateSceneRotSliders();
-      scheduleEval();
-      toast('Сцена и вид сброшены');
+      toast('Вид сцены сброшен');
     });
 
     document.querySelectorAll('#tabs button').forEach(b =>
@@ -2615,6 +3273,7 @@ const UI = (() => {
     bindNum(el.camRoll, v => { mutateShotCamRot('roll', v); scheduleEval(); });
     el.camModeFree.addEventListener('click', () => setShotCamMode('free'));
     el.camModeLookAt.addEventListener('click', () => setShotCamMode('lookAt'));
+    el.btnCamReset.addEventListener('click', resetShotCameraPosition);
     document.querySelectorAll('[data-campreset]').forEach(b =>
       b.addEventListener('click', () => { applyShotCamPreset(b.dataset.campreset); scheduleEval(); }));
 
@@ -2635,6 +3294,18 @@ const UI = (() => {
     el.camSn.addEventListener('change', () => setFocusDist(parseFloat(el.camSn.value)));
     el.modeA.addEventListener('click', () => setLensMode('A'));
     el.modeB.addEventListener('click', () => setLensMode('B'));
+    el.dollyF1.addEventListener('change',updateDollyUI); el.dollyF2.addEventListener('change',updateDollyUI); el.dollyT.addEventListener('input',updateDollyUI);
+    el.btnDollyReset.addEventListener('click',()=>{el.dollyF1.value=35;el.dollyF2.value=85;el.dollyT.value=0;updateDollyUI();});
+    el.btnDollyApply.addEventListener('click',()=>{
+      const f=State.currentFrame(),f1=Utils.clamp(+el.dollyF1.value||35,4,400),f2=Utils.clamp(+el.dollyF2.value||85,4,400),t=Utils.clamp(+el.dollyT.value||0,0,1),next=DollyZoom.sample(f,f1,f2,t);if(!next)return;
+      State.History.tx(()=>{f.camera.pos=next.camera.pos;f.lens.focalMm=next.lens.focalMm;f.lens.dollyF1=f1;f.lens.dollyF2=f2;f.lens.dollyT=t;});
+      State.save();refreshCameraUI();SceneManager.updateShotCamViz(FrameAdapter.frameToShot(f),FrameAdapter.lensOf(f));scheduleEval();
+    });
+    el.btnLensCompare.addEventListener('click',()=>{
+      const f=State.currentFrame(),v=f.lens.focalMm;el.cmpF1.value=v;el.cmpF2.value=Math.max(4,v*.7);el.cmpF3.value=Math.min(400,v*1.4);el.cmpF4.value=Math.min(400,v*2);el.lensCompareModal.classList.add('show');requestAnimationFrame(()=>LensCompare.open(f));
+    });
+    el.lensCompareClose.addEventListener('click',()=>el.lensCompareModal.classList.remove('show'));
+    el.cmpRender.addEventListener('click',()=>LensCompare.render(State.currentFrame()));
 
     const sceneRotHandler = () => {
       State.History.tx(() => {
@@ -2745,6 +3416,40 @@ const UI = (() => {
     });
     el.btnEvalAuto.classList.toggle('on', !!State.get().evalAuto);
 
+    el.btnImprove.addEventListener('click', () => {
+      const frame = State.currentFrame();
+      const profile = State.get().evalProfile || 'classic';
+      el.improveBox.style.display='block';
+      el.improveBox.innerHTML='<div class="hint">Поиск лучшего малого изменения…</div>';
+      requestAnimationFrame(() => {
+        try{
+          const result=ImproveEngine.improve(frame,profile);
+          if(!result.changed){
+            el.improveBox.innerHTML='<div class="iaHead"><span>Улучшение не найдено</span><span class="iaMuted">'+result.checked+' вариантов проверено</span></div><div class="iaMuted" style="margin-top:5px">Текущий кадр уже лучше найденных локальных вариантов.</div>';
+            return;
+          }
+          const b=Math.round(result.before.total*100), a=Math.round(result.best.result.total*100);
+          const weak=result.best.result.criteria.find(c=>c.s<0.6);
+          el.improveBox.innerHTML='<div class="iaHead"><span>Было → стало</span><span class="iaMuted">'+escapeHtml(result.best.label)+'</span></div>'+
+            '<div class="iaGrid"><div class="iaCell"><div class="iaMuted">Сейчас</div><div class="iaScore">'+b+'%</div></div>'+
+            '<div class="iaCell"><div class="iaMuted">Предложение</div><div class="iaScore">'+a+'%</div></div></div>'+
+            '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || 'Локальное улучшение композиции.')+'</div>'+
+            '<div class="iaActions"><button id="btnImproveApply" class="on">Применить</button><button id="btnImproveReject">Отклонить</button></div>';
+          document.getElementById('btnImproveApply').onclick=()=>{
+            ImproveEngine.apply(result);
+            el.improveBox.style.display='none';
+            refreshCameraUI();
+            SceneManager.updateShotCamViz(FrameAdapter.frameToShot(State.currentFrame()), FrameAdapter.lensOf(State.currentFrame()));
+            runEvaluationNow();
+          };
+          document.getElementById('btnImproveReject').onclick=()=>{ el.improveBox.style.display='none'; };
+        }catch(e){
+          console.error('Improve failed',e);
+          el.improveBox.innerHTML='<div class="hint">Не удалось построить предложение. Подробности в Console.</div>';
+        }
+      });
+    });
+
     // Заметки
     el.frameNotes.addEventListener('change', () => {
       State.History.tx(() => { State.currentFrame().notes = el.frameNotes.value; });
@@ -2804,6 +3509,9 @@ const UI = (() => {
     setupRulers();
     window.addEventListener('keydown', onKeyGlobal);
 
+    // Ширина правой панели: drag-resize, сохраняем между запусками.
+    setupPanelResize();
+
     // Первичная синхронизация
     document.querySelectorAll('.viewModeBtn').forEach(x =>
       x.classList.toggle('on', x.dataset.viewmode === (State.get().viewMode || 'normal')));
@@ -2850,6 +3558,23 @@ const UI = (() => {
     State.History.tx(() => { frame.camera[field] = value; });
     State.save(); refreshCameraUI();
   }
+  function resetShotCameraPosition(){
+    const frame = State.currentFrame();
+    State.History.tx(() => {
+      frame.camera.pos = [0, 1.6, 5];
+      frame.camera.yaw = 0;
+      frame.camera.pitch = 0;
+      frame.camera.roll = 0;
+      frame.camera.target = [0, 1, 0];
+      frame.camera.mode = 'free';
+      frame.camera.targetObjId = null;
+    });
+    State.save();
+    refreshCameraUI();
+    scheduleEval();
+    toast('Положение камеры сброшено');
+  }
+
   function setShotCamMode(mode){
     const frame = State.currentFrame();
     State.History.tx(() => { frame.camera.mode = mode; });
@@ -3075,6 +3800,53 @@ const UI = (() => {
       el.filmstrip.appendChild(item);
     });
   }
+  /* ============================================================
+     Sequence — этап 7: проигрывание раскадровки
+     ============================================================ */
+  const Sequence = (() => {
+    let playing=false, loop=true, timer=null, index=0;
+    function fs(){ return State.get().frames||[]; }
+    function dur(f){ return Math.max(0.05, Number(f.durationSec)||1); }
+    function total(){ return fs().reduce((s,f)=>s+dur(f),0); }
+    function syncUI(){
+      const p=document.getElementById('seqPlay'), l=document.getElementById('seqLoop');
+      const t=document.getElementById('seqTime'), b=document.getElementById('seqBar');
+      if(p)p.textContent=playing?'❚❚':'▶';
+      if(l)l.classList.toggle('on',loop);
+      const a=fs().slice(0,index).reduce((s,f)=>s+dur(f),0);
+      if(t)t.textContent=a.toFixed(1)+' / '+total().toFixed(1)+' с';
+      if(b)b.value=fs().length>1?Math.round(index/(fs().length-1)*100):0;
+    }
+    function stop(){playing=false;if(timer)clearTimeout(timer);timer=null;syncUI();}
+    function show(i){
+      const a=fs(); if(!a.length)return;
+      index=Utils.clamp(i,0,a.length-1);
+      State.get().currentFrameId=a[index].id; State.save();
+      SceneManager.rebuild(a[index]); UI.onFrameChanged(); syncUI();
+    }
+    function next(){
+      const a=fs(); if(!playing||!a.length)return;
+      if(index>=a.length-1){if(!loop){stop();return;}index=0;}else index++;
+      show(index); timer=setTimeout(next,dur(a[index])*1000);
+    }
+    function toggle(){
+      if(playing){stop();return;}
+      const a=fs(); if(!a.length)return;
+      index=Math.max(0,a.findIndex(f=>f.id===State.get().currentFrameId));
+      playing=true; show(index);
+      timer=setTimeout(next,dur(a[index])*1000); syncUI();
+    }
+    function init(){
+      document.getElementById('seqPlay')?.addEventListener('click',toggle);
+      document.getElementById('seqLoop')?.addEventListener('click',()=>{loop=!loop;syncUI();});
+      document.getElementById('seqBar')?.addEventListener('input',e=>{
+        stop(); const a=fs(); show(Math.round(Number(e.target.value)/100*Math.max(0,a.length-1)));
+      });
+      syncUI();
+    }
+    return {init,stop,total};
+  })();
+
   function updateFrameMeta(){
     const f = State.currentFrame();
     el.frameNotes.value = f.notes || '';
@@ -3191,7 +3963,7 @@ const UI = (() => {
     const H = Math.round(W * frame.aspect[1] / frame.aspect[0]);
     const tmp = document.createElement('canvas');
     tmp.width = W; tmp.height = H;
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
     const cam = CameraRig.apply(shot, lens);
@@ -3202,7 +3974,7 @@ const UI = (() => {
     r.setSize(W, H, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.setClearColor(0x000000, 1);
-    r.render(scene, cam);
+    r.render(rootGroup, cam);
     const ctx = tmp.getContext('2d');
     ctx.drawImage(r.domElement, 0, 0, W, H);
     r.dispose();
@@ -3234,7 +4006,7 @@ const UI = (() => {
     out.width = totalW; out.height = totalH;
     const octx = out.getContext('2d');
     octx.fillStyle = '#0a0a0a'; octx.fillRect(0, 0, totalW, totalH);
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const r = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
     r.setSize(W, W, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
@@ -3248,7 +4020,7 @@ const UI = (() => {
       const cam = CameraRig.apply(shot, lens);
       r.setSize(W, H, false);
       r.setClearColor(0x000000, 1);
-      r.render(scene, cam);
+      r.render(rootGroup, cam);
       octx.drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, x, y, W, H);
       octx.fillStyle = '#e6e6e6'; octx.font = '20px sans-serif';
       octx.fillText(`${i+1}. ${f.name}`, x, y + H + 30);
@@ -3260,7 +4032,7 @@ const UI = (() => {
 
   function exportPDF(){
     const frames = State.get().frames;
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const r = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
     r.setSize(480, 270, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
@@ -3273,7 +4045,7 @@ const UI = (() => {
       const cam = CameraRig.apply(shot, lens);
       r.setSize(W, H, false);
       r.setClearColor(0x000000, 1);
-      r.render(scene, cam);
+      r.render(rootGroup, cam);
       const tmp = document.createElement('canvas');
       tmp.width = W; tmp.height = H;
       tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, W, H);
@@ -3364,36 +4136,23 @@ const UI = (() => {
       overlay.width = W; overlay.height = H;
     }
 
-    // Пост-обработки (Ч/Б, прищур, дальтонизм) — сделаем на копии рендера
-    const vm = State.get().viewMode || 'normal';
-    const cvd = State.get().cvd || 'none';
-    if(vm !== 'normal' || cvd !== 'none'){
-      const canvas = FrameRenderer.get().domElement;
-      const w = canvas.width, h = canvas.height;
-      // Возьмём пиксели прямо из WebGL через промежуточный canvas
-      const tmp = document.createElement('canvas');
-      tmp.width = w; tmp.height = h;
-      tmp.getContext('2d').drawImage(canvas, 0, 0);
-      const ctx = tmp.getContext('2d');
-      applyPostFX(ctx, w, h, vm, cvd);
-      // Копируем результат обратно в буфер отображения
-      const dst = document.createElement('canvas');
-      dst.width = w; dst.height = h;
-      dst.getContext('2d').drawImage(tmp, 0, 0);
-      // Рисуем в рендерер поверх:
-      // Простейший вариант: заменить содержимое через drawImage невозможно,
-      // поэтому просто наложим поверх прозрачный canvas с эффектом.
-      // Здесь делаем проще: пост-обработки не влияют на вывод кадра напрямую,
-      // они применяются в PNG-экспорте. Для визуального просмотра
-      // (Ч/Б, прищур) добавим CSS-фильтр на canvas.
-      const rcanvas = FrameRenderer.get().domElement;
-      if(vm === 'bw') rcanvas.style.filter = 'grayscale(1)';
-      else if(vm === 'squint') rcanvas.style.filter = 'blur(6px)';
-      else if(vm === 'mini') rcanvas.style.filter = 'blur(0px)';
-      else rcanvas.style.filter = '';
-      void ctx; void dst;
-    } else {
-      FrameRenderer.get().domElement.style.filter = '';
+    // Пост-обработка через offscreen canvas.
+    const vm = State.get().viewMode || 'normal', cvd = State.get().cvd || 'none';
+    let postfx = container.querySelector('canvas.postFxLayer');
+    if(!postfx){
+      postfx=document.createElement('canvas'); postfx.className='postFxLayer';
+      postfx.style.position='absolute'; postfx.style.inset='0'; postfx.style.width='100%'; postfx.style.height='100%';
+      postfx.style.pointerEvents='none'; postfx.style.zIndex='1'; container.appendChild(postfx);
+    }
+    const webglCanvas=FrameRenderer.get().domElement;
+    webglCanvas.style.position='absolute'; webglCanvas.style.inset='0'; webglCanvas.style.zIndex='0';
+    if(postfx.width!==info.w||postfx.height!==info.h){postfx.width=info.w;postfx.height=info.h;}
+    const postCtx=postfx.getContext('2d'); postCtx.clearRect(0,0,info.w,info.h);
+    if(info.pixels && (vm!=='normal'||cvd!=='none')){
+      const imgData=new ImageData(new Uint8ClampedArray(info.pixels),info.w,info.h);
+      applyPostFXToImageData(imgData,vm,cvd);
+      const ic=document.createElement('canvas'); ic.width=info.w;ic.height=info.h;ic.getContext('2d').putImageData(imgData,0,0);
+      postCtx.save();postCtx.translate(0,info.h);postCtx.scale(1,-1);postCtx.drawImage(ic,0,0);postCtx.restore();
     }
 
     // Сетки
@@ -3423,8 +4182,7 @@ const UI = (() => {
     );
   }
 
-  function applyPostFX(ctx, W, H, viewModeKey, cvd){
-    const img = ctx.getImageData(0, 0, W, H);
+  function applyPostFXToImageData(img, viewModeKey, cvd){
     const d = img.data;
     if(viewModeKey === 'bw'){
       for(let i=0;i<d.length;i+=4){
@@ -3432,29 +4190,40 @@ const UI = (() => {
         d[i] = d[i+1] = d[i+2] = y;
       }
     }
+    if(viewModeKey === 'squint'){
+      const W = img.width, H = img.height;
+      const src = new Uint8ClampedArray(d);
+      const radius = 4;
+      for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+        let sr=0,sg=0,sb=0,cnt=0;
+        for(let dy=-radius;dy<=radius;dy+=2){
+          const yy=Math.max(0,Math.min(H-1,y+dy));
+          for(let dx=-radius;dx<=radius;dx+=2){
+            const xx=Math.max(0,Math.min(W-1,x+dx));
+            const idx=(yy*W+xx)*4;
+            sr+=src[idx]; sg+=src[idx+1]; sb+=src[idx+2]; cnt++;
+          }
+        }
+        const o=(y*W+x)*4;
+        d[o]=sr/cnt; d[o+1]=sg/cnt; d[o+2]=sb/cnt;
+      }
+    }
     if(cvd === 'prot'){
       for(let i=0;i<d.length;i+=4){
-        const r = d[i], g = d[i+1], b = d[i+2];
-        d[i]   = 0.567*r + 0.433*g;
-        d[i+1] = 0.558*r + 0.442*g;
-        d[i+2] = 0.242*g + 0.758*b;
+        const r=d[i],g=d[i+1],b=d[i+2];
+        d[i]=0.567*r+0.433*g; d[i+1]=0.558*r+0.442*g; d[i+2]=0.242*g+0.758*b;
       }
     } else if(cvd === 'deut'){
       for(let i=0;i<d.length;i+=4){
-        const r = d[i], g = d[i+1], b = d[i+2];
-        d[i]   = 0.625*r + 0.375*g;
-        d[i+1] = 0.700*r + 0.300*g;
-        d[i+2] = 0.300*g + 0.700*b;
+        const r=d[i],g=d[i+1],b=d[i+2];
+        d[i]=0.625*r+0.375*g; d[i+1]=0.700*r+0.300*g; d[i+2]=0.300*g+0.700*b;
       }
     } else if(cvd === 'trit'){
       for(let i=0;i<d.length;i+=4){
-        const r = d[i], g = d[i+1], b = d[i+2];
-        d[i]   = 0.950*r + 0.050*g;
-        d[i+1] = 0.433*g + 0.567*b;
-        d[i+2] = 0.475*g + 0.525*b;
+        const r=d[i],g=d[i+1],b=d[i+2];
+        d[i]=0.950*r+0.050*g; d[i+1]=0.433*g+0.567*b; d[i+2]=0.475*g+0.525*b;
       }
     }
-    ctx.putImageData(img, 0, 0);
   }
 
   /* ---------- Панель сеток ---------- */
@@ -3606,6 +4375,96 @@ const UI = (() => {
   }
   function updateGuideCount(){ el.guideCount.textContent = String((State.get().guides || []).length); }
 
+  /* ---------- Размеры панелей: перетаскиваемые разделители ---------- */
+  // Левая колонка (инструменты), правая панель и нижняя панель меняют размер
+  // перетаскиванием разделителя (курсор ↔ / ↕). Двойной клик — исходный размер.
+  // Размеры сохраняются между запусками.
+  const SPLITTERS = [
+    { id:'toolsResize', cssVar:'--w-tools', key:'framelab.ui.toolsWidth', axis:'x', sign: 1, def:56,  min:44,  max:()=>Math.min(240, window.innerWidth*0.25) },
+    { id:'panelResize', cssVar:'--w-panel', key:'framelab.ui.panelWidth', axis:'x', sign:-1, def:400, min:220, max:()=>Math.max(320, window.innerWidth*0.6) },
+    { id:'filmResize',  cssVar:'--h-film',  key:'framelab.ui.filmHeight', axis:'y', sign:-1, def:112, min:56,  max:()=>Math.max(120, window.innerHeight*0.6) }
+  ];
+  function cssPx(name, fallback){
+    const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+    return Number.isFinite(v) ? v : fallback;
+  }
+  function applySplitterSize(s, value){
+    let max = s.max();
+    if(s.axis === 'x'){
+      const other = s.cssVar === '--w-panel' ? cssPx('--w-tools', 56) : cssPx('--w-panel', 400);
+      max = Math.min(max, window.innerWidth - other - 240);   // центру всегда остаётся место
+    }else{
+      max = Math.min(max, window.innerHeight - cssPx('--h-menu', 28) - cssPx('--h-ctrl', 32) - 160);
+    }
+    const next = Utils.clamp(Number(value) || s.def, s.min, Math.max(s.min, max));
+    document.documentElement.style.setProperty(s.cssVar, next + 'px');
+    return next;
+  }
+  let layoutRaf = 0;
+  function refreshAfterLayout(){
+    if(layoutRaf) return;
+    layoutRaf = requestAnimationFrame(() => {
+      layoutRaf = 0;
+      const info = SceneManager.getRenderInfo();
+      const host = info?.renderer?.domElement?.parentElement;
+      if(host){
+        const rect = host.getBoundingClientRect();
+        if(rect.width > 0 && rect.height > 0){
+          info.editorCamera.aspect = rect.width / rect.height;
+          info.editorCamera.updateProjectionMatrix();
+          info.renderer.setSize(rect.width, rect.height);
+        }
+      }
+      drawRulers();
+    });
+  }
+  function setupPanelResize(){
+    SPLITTERS.forEach(s => {
+      const handle = document.getElementById(s.id);
+      if(!handle) return;
+      let saved = NaN;
+      try{ saved = parseFloat(localStorage.getItem(s.key)); }catch(e){}
+      if(Number.isFinite(saved)) applySplitterSize(s, saved);
+
+      let drag = null;
+      const cursor = s.axis === 'x' ? 'ew-resize' : 'ns-resize';
+      handle.addEventListener('pointerdown', e => {
+        drag = { start: s.axis === 'x' ? e.clientX : e.clientY, startSize: cssPx(s.cssVar, s.def) };
+        handle.classList.add('dragging');
+        handle.setPointerCapture(e.pointerId);
+        document.body.style.cursor = cursor;
+        e.preventDefault();
+      });
+      handle.addEventListener('pointermove', e => {
+        if(!drag) return;
+        const pos = s.axis === 'x' ? e.clientX : e.clientY;
+        applySplitterSize(s, drag.startSize + s.sign * (pos - drag.start));
+        refreshAfterLayout();
+        e.preventDefault();
+      });
+      const stop = () => {
+        if(!drag) return;
+        drag = null;
+        handle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        try{ localStorage.setItem(s.key, String(cssPx(s.cssVar, s.def))); }catch(e){}
+        refreshAfterLayout();
+      };
+      handle.addEventListener('pointerup', stop);
+      handle.addEventListener('pointercancel', stop);
+      handle.addEventListener('dblclick', () => {
+        applySplitterSize(s, s.def);
+        try{ localStorage.removeItem(s.key); }catch(e){}
+        refreshAfterLayout();
+      });
+    });
+    // При изменении окна не даём сохранённым размерам «съесть» центральную область.
+    window.addEventListener('resize', () => {
+      SPLITTERS.forEach(s => applySplitterSize(s, cssPx(s.cssVar, s.def)));
+      refreshAfterLayout();
+    });
+  }
+
   /* ---------- Режимы ---------- */
   function setEditorMode(m){ SceneManager.setEditorMode(m); }
   function applyViewMode(){
@@ -3620,6 +4479,7 @@ const UI = (() => {
       el.hudMode.textContent = 'Сцена 3D';
       const rinfo = SceneManager.getRenderInfo();
       el.sceneBody.appendChild(rinfo.renderer.domElement);
+      SceneManager.setHost(el.sceneBody);
       setTimeout(() => {
         const rect = el.sceneBody.getBoundingClientRect();
         rinfo.editorCamera.aspect = rect.width / rect.height;
@@ -3632,6 +4492,7 @@ const UI = (() => {
       el.hudMode.textContent = 'Сплит';
       const rinfo = SceneManager.getRenderInfo();
       el.splitLeft.appendChild(rinfo.renderer.domElement);
+      SceneManager.setHost(el.splitLeft);
       setTimeout(() => {
         const rect = el.splitLeft.getBoundingClientRect();
         rinfo.editorCamera.aspect = rect.width / rect.height;
@@ -3675,13 +4536,23 @@ const UI = (() => {
     el.modeB.classList.toggle('on', m === 'B');
     State.save();
   }
+  function updateDollyUI(){
+    const f=State.currentFrame(),f1=Utils.clamp(parseFloat(el.dollyF1.value)||35,4,400),f2=Utils.clamp(parseFloat(el.dollyF2.value)||85,4,400),t=Utils.clamp(parseFloat(el.dollyT.value)||0,0,1);
+    const ep=DollyZoom.endpoints(f,f1,f2), sample=DollyZoom.sample(f,f1,f2,t);
+    el.dollyTVal.textContent=Math.round(t*100)+'%';
+    if(!ep||!sample){el.dollyDist.textContent='—';el.dollyScaleCheck.textContent='—';return;}
+    el.dollyDist.textContent=new THREE.Vector3(...sample.camera.pos).distanceTo(new THREE.Vector3(...sample.camera.target)).toFixed(2)+' м';
+    el.dollyScaleCheck.textContent='100% (теория)';
+  }
   function refreshCameraUI(){
     const frame = State.currentFrame();
+    if(!frame) return;
     el.camSensor.value = frame.sensor;
     el.camAspect.value = frame.aspect[0] + ':' + frame.aspect[1];
     el.camF.value = frame.lens.focalMm; el.camFn.value = frame.lens.focalMm;
     el.camN.value = frame.lens.aperture; el.camNn.value = frame.lens.aperture;
     el.camS.value = frame.lens.focusDistM; el.camSn.value = frame.lens.focusDistM;
+    el.dollyF1.value=frame.lens.dollyF1??35; el.dollyF2.value=frame.lens.dollyF2??85; el.dollyT.value=frame.lens.dollyT??0; updateDollyUI();
     el.camPX.value = frame.camera.pos[0].toFixed(3);
     el.camPY.value = frame.camera.pos[1].toFixed(3);
     el.camPZ.value = frame.camera.pos[2].toFixed(3);
@@ -3702,6 +4573,12 @@ const UI = (() => {
     sel.value = frame.camera.targetObjId || '';
 
     const lens = FrameAdapter.lensOf(frame);
+    // Пирамида/фрустум камеры всегда синхронизирован с текущим кадром:
+    // фокусное, формат, позиция и ориентация сразу видны в 3D-сцене.
+    SceneManager.updateShotCamViz(
+      FrameAdapter.frameToShot(frame),
+      lens
+    );
     el.infoFovH.textContent = lens.fovH.toFixed(1) + '°';
     el.infoFovV.textContent = lens.fovV.toFixed(1) + '°';
     el.infoCrop.textContent = lens.crop.toFixed(2);
@@ -3895,7 +4772,7 @@ const UI = (() => {
     const frame = State.currentFrame();
     const profile = State.get().evalProfile || 'classic';
     try{
-      const res = Evaluator.evaluate(frame, profile);
+      const res = EvaluatorV2.evaluate(frame, profile);
       lastEval = res;
       renderEval(res);
       el.hudScore.textContent = Math.round(res.total * 100) + '%';
@@ -3908,7 +4785,8 @@ const UI = (() => {
     const total = Math.round(res.total * 100);
     el.evalScore.textContent = total + '%';
     el.evalScore.style.color = total >= 85 ? '#4caf50' : total >= 70 ? '#8bc34a' : total >= 50 ? '#ff9800' : '#f44336';
-    el.evalProfile.textContent = 'профиль: ' + (res.profile === 'classic' ? 'Классика' : 'Свободный');
+    const profileNames={classic:'Классика',dynamic:'Динамика',symmetry:'Симметрия',minimalism:'Минимализм',portrait:'Портрет',landscape:'Пейзаж',vertical:'Вертикальное видео',cinematic:'Cinematic Wide',free:'Свободный'};
+    el.evalProfile.textContent = 'профиль: ' + (profileNames[res.profile] || res.profile);
     const badge = total >= 85 ? 'отлично' : total >= 70 ? 'хорошо' : total >= 50 ? 'есть что улучшить' : 'слабо';
     el.evalBadge.textContent = badge;
     el.evalBadge.style.background = total >= 85 ? '#27ae60' : total >= 70 ? '#4caf50' : total >= 50 ? '#d68910' : '#c0392b';
@@ -4178,6 +5056,24 @@ const Board = (() => {
    ============================================================ */
 const Thumbs = (() => {
   const cache = new Map();
+  let renderer = null;
+  let canvas = null;
+  function getRenderer(w,h){
+    if(!renderer){
+      canvas = document.createElement('canvas');
+      renderer = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true, canvas });
+      renderer.setPixelRatio(1);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.setClearColor(0x000000, 1);
+      canvas.addEventListener('webglcontextlost', e => {
+        e.preventDefault();
+        renderer = null;
+        canvas = null;
+      });
+    }
+    renderer.setSize(w,h,false);
+    return renderer;
+  }
   function updateAll(){
     for(const f of State.get().frames) update(f.id);
   }
@@ -4187,17 +5083,13 @@ const Thumbs = (() => {
     const w = 320, h = Math.round(w * frame.aspect[1] / frame.aspect[0]);
     const tmp = document.createElement('canvas');
     tmp.width = w; tmp.height = h;
-    const scene = SceneManager.getRenderInfo().scene;
+    const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
     const cam = CameraRig.apply(shot, lens);
-    const r = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
-    r.setSize(w, h, false);
-    r.outputColorSpace = THREE.SRGBColorSpace;
-    r.setClearColor(0x000000, 1);
-    r.render(scene, cam);
+    const r = getRenderer(w,h);
+    r.render(rootGroup, cam);
     tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, w, h);
-    r.dispose();
     const url = tmp.toDataURL('image/png');
     const img = cache.get(frameId) || new Image();
     img.onload = () => { UI.renderFilmstrip(); if(viewBoardActive()) Board.redraw(); };
@@ -4218,10 +5110,14 @@ const Thumbs = (() => {
 function runTests(){
   const results = [];
   function t(name, got, want, tol){
-    const ok = Math.abs(got - want) <= tol;
-    results.push({ name, got, want, ok });
+    const ok = Number.isFinite(got) && Math.abs(got - want) <= tol;
+    results.push({ name, got, want, tol, ok });
   }
-  // FOV FF
+  function ok(name, value){
+    results.push({ name, got: value ? 1 : 0, want: 1, tol: 0, ok: !!value });
+  }
+
+  // FOV FF 3:2
   const cases = [
     [14, 104.3, 81.2, 114.2], [24, 73.7, 53.1, 84.0], [35, 54.4, 37.8, 63.4],
     [50, 39.6, 27.0, 46.8], [85, 23.9, 16.1, 28.6], [135, 15.2, 10.2, 18.2],
@@ -4233,42 +5129,68 @@ function runTests(){
     t('FOVv '+f, lens.fovV, v, 0.1);
     t('FOVd '+f, lens.fovD, d, 0.1);
   }
+
+  // Dolly Zoom acceptance
+  {
+    const f=State.currentFrame(),ep=DollyZoom.endpoints(f,35,85);
+    ok('Dolly endpoints',!!ep);
+    if(ep)t('Dolly distance ratio',ep.b.distance/ep.a.distance,85/35,0.01);
+    if(ep)t('Dolly scale ratio',ep.scaleRatio,1,0.0001);
+  }
+
   // ГРИП
   {
     const df = LensModel.dof(85, 1.8, 3000, 'FF');
     t('Dn 85/1.8/3м', df.Dn, 2936, 5);
     t('Df 85/1.8/3м', df.Df, 3067, 5);
+    ok('ГРИП: дальняя граница конечна', Number.isFinite(df.Df));
   }
+
   // Виньетка
   {
     const rDiag = Math.sqrt(36*36 + 24*24) / 2;
     t('Виньетка FF 24mm', LensModel.vignetteAt(24, rDiag), 0.305, 0.02);
   }
-  // Точка ровно на силовой — S_thirds > 0.95
+
+  // Третьи
   {
-    const r = Evaluator.evaluate.__test_thirds ? Evaluator.evaluate.__test_thirds(1/3, 1/3) : null;
-    if(r) t('S_thirds точно на точке', r.s, 1, 0.05);
+    const r = Evaluator._test.s_thirds_fromPoint(1/3, 1/3);
+    t('S_thirds точно на точке', r.s, 1, 0.05);
+    ok('S_thirds: ближайшая точка определена', Array.isArray(r.nearest) && r.nearest.length === 2);
   }
-  // Точка в центре — S_thirds около 0.29
-  // (проверим через вычисление функции exp(-d^2/(2σ²)) при d = sqrt((1/3)^2+(1/3)^2) = 0.4714, σ=0.15)
   {
-    const d = Math.hypot(1/3, 1/3);
-    const s = Math.exp(-d*d / (2*0.15*0.15));
-    t('S_thirds центр', s, 0.29, 0.02);
+    const r = Evaluator._test.s_thirds_fromPoint(0.5, 0.5);
+    t('S_thirds в центре', r.s, 0.29, 0.02);
   }
-  // Горизонт при pitch=0
+
+  // Базовые evaluator API
   {
-    const v = AnalyzerLite.horizonV({ pitch:0 }, { fovV: 27 });
+    const b = Evaluator._test.s_balance({u:0.5,v:0.5});
+    t('S_balance в центре', b, 1, 0.0001);
+    const f = Evaluator._test.s_focus(0.9);
+    ok('S_focus API работает', Number.isFinite(f.s) && Number.isFinite(f.frac));
+    const cl = Evaluator._test.s_clarity(0.8);
+    ok('S_clarity API работает', Number.isFinite(cl));
+  }
+
+  // Горизонт
+  {
+    const v = AnalyzerLite.horizonV({ pitch:0 }, { fovV:27 });
     t('Горизонт pitch=0', v, 0.5, 0.001);
   }
+
   const passed = results.filter(r => r.ok).length;
+  const summary = { passed, total: results.length, results };
   console.group('%cFrameLab · Тесты (этап 5)', 'color:#4a9eff;font-weight:bold');
   results.forEach(r => {
     const c = r.ok ? 'color:#4caf50' : 'color:#f44336';
-    console.log(`%c${r.ok?'✔':'✘'} ${r.name}: ${r.got.toFixed(3)} ~ ${r.want}`, c);
+    const got = typeof r.got === 'number' ? r.got.toFixed(3) : String(r.got);
+    console.log(`%c${r.ok?'✔':'✘'} ${r.name}: ${got} ~ ${r.want}`, c);
   });
   console.log(`%cИтого: ${passed}/${results.length}`, 'color:#4a9eff;font-weight:bold');
   console.groupEnd();
+  window.__FrameLabStage5Tests = summary;
+  return summary;
 }
 
 /* ============================================================
@@ -4284,6 +5206,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   Board.init();
   UI.init();
+  Sequence.init();
 
   const project = State.get();
   if(project.objects.length === 0){
