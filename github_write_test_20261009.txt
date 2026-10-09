@@ -1,1 +1,0 @@
-FrameLab GitHub write test. Temporary file created to verify repository write access.
