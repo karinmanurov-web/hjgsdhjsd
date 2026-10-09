@@ -5209,6 +5209,7 @@ const UI = (() => {
             if(select.value !== 'cylinder') d.params.extrude = 0;
           });
           SceneManager.updateParamsFromData(d); State.save(); scheduleEval();
+          renderShapeParams(d);
         });
         row.appendChild(select); el.pShapeParams.appendChild(row);
         mk('Радиус (м)','radius',0.01,10,0.05);
