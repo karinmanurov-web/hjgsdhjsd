@@ -136,7 +136,9 @@
   .filmItem .lbl{position:relative;z-index:2;background:rgba(0,0,0,.7);padding:1px 4px;border-radius:3px}
   .filmItem .num{position:absolute;top:2px;left:4px;z-index:2;background:rgba(0,0,0,.7);
     padding:0 4px;border-radius:3px;font-weight:600}
+  .choiceBtn{display:block;width:100%;text-align:left;margin:6px 0;padding:8px 12px}
   .filmItem.dragTarget{border-color:var(--warn)}
+  .filmItem .dur{position:absolute;right:4px;bottom:2px;z-index:2;background:rgba(0,0,0,.7);padding:0 4px;border-radius:3px;font-size:10px}
   .toast{position:absolute;top:calc(var(--h-ruler) + 44px);left:50%;transform:translateX(-50%);
     background:rgba(0,0,0,.9);color:#fff;padding:6px 12px;border-radius:4px;
     font-size:12px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:30}
@@ -323,9 +325,13 @@
           <canvas id="boardCanvas"></canvas>
           <canvas id="boardLayer"></canvas>
         </div>
-        <div style="position:absolute;top:8px;left:8px;z-index:5" class="hint">
-          Раскадровка: перетаскивайте кадры, <b>Alt</b>+тяга от правого края — стрелка.
-          Колесо — зум, средняя — панорама.
+        <div style="position:absolute;top:26px;left:8px;z-index:5;display:flex;gap:6px;flex-direction:column;align-items:flex-start">
+          <button id="boardFit" title="Показать всю раскадровку (F)">Показать всё</button>
+          <button id="boardReset" title="Расставить кадры сеткой по порядку">Расставить по порядку</button>
+        </div>
+        <div class="hint" style="position:absolute;right:8px;bottom:8px;z-index:5;max-width:min(520px,45%);margin:0;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:4px">
+          Тяните кадры; пустое место — панорама; колесо — зум; двойной клик — открыть кадр;
+          <b>Alt</b>+тяга от правого края — стрелка; правая кнопка — меню (на стрелке — удалить).
         </div>
       </div>
     </div>
@@ -836,11 +842,61 @@ const State = (() => {
     if(!project.currentFrameId || !project.frames.find(f => f.id === project.currentFrameId)){
       project.currentFrameId = project.frames[0].id;
     }
+    project.frames.forEach(f => { if(!f.overrides || typeof f.overrides !== 'object') f.overrides = {}; });
+    adoptFrameState(project.frames.find(f => f.id === project.currentFrameId), project);
     return project;
   }
   function save(){
     try{ localStorage.setItem('framelab.project.v5', JSON.stringify(project)); emit('saved'); }
-    catch(e){ console.error(e); }
+    catch(e){ console.error(e); emit('saveError', e); }
+  }
+
+  /* ---------- Состояние объектов по кадрам ----------
+     Живые данные объектов (project.objects) всегда соответствуют ТЕКУЩЕМУ кадру.
+     У остальных кадров их положение/цвет/видимость лежат в frame.overrides
+     (снимок по id объекта). При смене кадра состояние уходящего кадра
+     сохраняется в overrides, а состояние входящего переносится в объекты.
+     Так героев и камеру можно двигать от кадра к кадру, не портя соседние кадры. */
+  function snapshotObjects(p){
+    p = p || project;
+    const out = {};
+    for(const o of p.objects){
+      out[o.id] = {
+        transform: JSON.parse(JSON.stringify(o.transform)),
+        color: { ...o.color },
+        visible: o.visible !== false
+      };
+    }
+    return out;
+  }
+  function adoptFrameState(frame, p){
+    p = p || project;
+    if(!frame || !frame.overrides) return;
+    for(const o of p.objects){
+      const st = frame.overrides[o.id];
+      if(!st) continue;
+      if(st.transform) o.transform = { ...o.transform, ...JSON.parse(JSON.stringify(st.transform)) };
+      if(st.color) o.color = { ...o.color, ...st.color };
+      if(st.visible !== undefined) o.visible = st.visible;
+    }
+    frame.overrides = {};   // у текущего кадра отличий нет: он и есть «живые» объекты
+  }
+  function switchFrame(id, pOverride){
+    const p = pOverride || project;
+    const next = p.frames.find(f => f.id === id);
+    if(!next) return false;
+    const cur = p.frames.find(f => f.id === p.currentFrameId);
+    p.currentFrameId = id;
+    if(cur !== next){
+      if(cur) cur.overrides = snapshotObjects(p);   // кадра cur может уже не быть (удалён)
+      adoptFrameState(next, p);
+    }
+    return true;
+  }
+  // Снимок состояния объектов для кадра (для дубликатов и новых кадров).
+  function objectStateOf(frame){
+    if(frame && frame.id === project.currentFrameId) return snapshotObjects(project);
+    return JSON.parse(JSON.stringify((frame && frame.overrides) || snapshotObjects(project)));
   }
   function get(){ return project; }
   function currentFrame(){
@@ -882,7 +938,8 @@ const State = (() => {
   })();
 
   return { on, emit, load, save, get, currentFrame, defaultGrids,
-           defaultFrame, defaultShotCam, uid, History };
+           defaultFrame, defaultShotCam, uid, History,
+           snapshotObjects, adoptFrameState, switchFrame, objectStateOf };
 })();
 
 /* ============================================================
@@ -1394,6 +1451,13 @@ const SceneManager = (() => {
     if(camGroup) camGroup.visible = true;
     emit('rebuilt');
   }
+  // Показать объекты в состоянии указанного кадра (для миниатюр и экспорта).
+  function applyFrameState(frame){
+    for(const [id, data] of objectData){
+      applyTransform(data, frame);
+      applyColor(data, frame);
+    }
+  }
   function rebuildOne(id, frame){
     const data = objectData.get(id); if(!data) return;
     const old = objectMap.get(id);
@@ -1590,7 +1654,7 @@ const SceneManager = (() => {
     getSelectedData, getSelectedId, getCamGroup, getCamPicker,
     setGizmoMode, getGizmoMode, setAxis, getAxis,
     commitTransform, updateTransformFromData, updateColorFromData,
-    updateParamsFromData, rebuild, rebuildOne, fitView, resetView, setEditorViewPreset,
+    updateParamsFromData, rebuild, rebuildOne, applyFrameState, fitView, resetView, setEditorViewPreset,
     updateShotCamViz, readCamGroupToShot,
     setSceneRotation, getSceneRotation, applySceneRotationFromState,
     setEditorMode, getEditorMode, setHost,
@@ -3460,7 +3524,11 @@ const UI = (() => {
       State.save();
     });
 
-    State.on('saved', () => el.saveState.textContent = 'Сохранено ' + new Date().toLocaleTimeString());
+    State.on('saved', () => { el.saveState.textContent = 'Сохранено ' + new Date().toLocaleTimeString(); Thumbs.scheduleCurrent(); });
+    State.on('saveError', () => {
+      el.saveState.textContent = 'НЕ СОХРАНЕНО';
+      toast('Не удалось сохранить в браузере (память заполнена?). Сделайте экспорт JSON!');
+    });
     State.on('reloaded', () => { onProjectReload(); toast('Восстановлено из истории'); });
 
     SceneManager.on('selectionChanged', renderProps);
@@ -3545,6 +3613,8 @@ const UI = (() => {
     el.evalProfileSel.value = State.get().evalProfile || 'classic';
     el.btnEvalAuto.classList.toggle('on', !!State.get().evalAuto);
     runEvaluationNow();
+    Board.redraw();
+    Thumbs.updateAll();
   }
 
   /* ---------- ShotCam ---------- */
@@ -3644,10 +3714,10 @@ const UI = (() => {
                mainObjId: cur.camera.mainObjId };
     }
     const f = State.defaultFrame(name, base);
-    if(variant === 'copy') f.overrides = JSON.parse(JSON.stringify(cur.overrides || {}));
+    f.overrides = State.objectStateOf(cur);   // объекты в новом кадре стартуют как в текущем
     State.History.tx(() => {
       project.frames.push(f);
-      project.currentFrameId = f.id;
+      State.switchFrame(f.id);
     });
     State.save();
     el.addFrameModal.classList.remove('show');
@@ -3673,39 +3743,77 @@ const UI = (() => {
     return base;
   }
   function dupCurrentFrame(){
+    const copy = duplicateFrameById(State.currentFrame().id, true);
+    if(copy) toast('Дублирован кадр: ' + copy.name);
+  }
+  function delCurrentFrame(){ deleteFrameById(State.get().currentFrameId); }
+
+  // Дублирует кадр сразу после исходного. select=true — перейти на копию.
+  function duplicateFrameById(frameId, select){
     const project = State.get();
-    const cur = State.currentFrame();
-    const idx = project.frames.indexOf(cur);
-    const copy = JSON.parse(JSON.stringify(cur));
+    const idx = project.frames.findIndex(f => f.id === frameId);
+    if(idx < 0) return null;
+    const src = project.frames[idx];
+    const copy = JSON.parse(JSON.stringify(src));
     copy.id = State.uid();
-    copy.name = cur.name + ' (дубль)';
+    copy.name = src.name + ' (дубль)';
+    copy.overrides = State.objectStateOf(src);
     State.History.tx(() => {
       project.frames.splice(idx + 1, 0, copy);
-      project.currentFrameId = copy.id;
+      if(select) State.switchFrame(copy.id);
     });
     State.save();
-    SceneManager.rebuild(copy);
-    onFrameChanged(); Thumbs.update(copy.id);
-    toast('Дублирован кадр: ' + copy.name);
+    if(select) SceneManager.rebuild(State.currentFrame());
+    onFrameChanged();
+    Thumbs.update(copy.id);
+    Board.redraw();
+    return copy;
   }
-  function delCurrentFrame(){
+  function deleteFrameById(frameId){
     const project = State.get();
     if(project.frames.length <= 1){ toast('Нельзя удалить последний кадр'); return; }
-    const cur = State.currentFrame();
-    const idx = project.frames.indexOf(cur);
+    const idx = project.frames.findIndex(f => f.id === frameId);
+    if(idx < 0) return;
+    const wasCurrent = project.currentFrameId === frameId;
     State.History.tx(() => {
       project.frames.splice(idx, 1);
-      const next = project.frames[Math.min(idx, project.frames.length - 1)];
-      project.currentFrameId = next.id;
+      const bl = project.boardLayout;
+      if(bl){
+        if(bl.positions) delete bl.positions[frameId];
+        if(Array.isArray(bl.arrows)) bl.arrows = bl.arrows.filter(a => a.from !== frameId && a.to !== frameId);
+      }
+      if(wasCurrent) State.switchFrame(project.frames[Math.min(idx, project.frames.length - 1)].id);
     });
     State.save();
-    SceneManager.rebuild(State.currentFrame());
-    onFrameChanged(); Thumbs.updateAll();
+    Thumbs.forget(frameId);
+    if(wasCurrent) SceneManager.rebuild(State.currentFrame());
+    onFrameChanged();
+    Board.redraw();
+    toast('Кадр удалён (Ctrl+Z — вернуть)');
+  }
+  function renameFrameById(frameId){
+    const f = State.get().frames.find(x => x.id === frameId);
+    if(!f) return;
+    const name = prompt('Название кадра', f.name);
+    if(name === null) return;
+    State.History.tx(() => { f.name = name.trim() || f.name; });
+    State.save(); renderFrameList(); renderFilmstrip(); updateFrameMeta(); Board.redraw();
+  }
+  function moveFrameById(frameId, delta){
+    const project = State.get();
+    const from = project.frames.findIndex(f => f.id === frameId);
+    const to = from + delta;
+    if(from < 0 || to < 0 || to >= project.frames.length) return;
+    State.History.tx(() => {
+      const [m] = project.frames.splice(from, 1);
+      project.frames.splice(to, 0, m);
+    });
+    State.save(); renderFilmstrip(); renderFrameList(); Board.redraw();
   }
   function selectFrameById(id){
     const project = State.get();
     if(!project.frames.find(f => f.id === id)) return;
-    project.currentFrameId = id;
+    if(project.currentFrameId !== id) State.switchFrame(id);
     State.save();
     SceneManager.rebuild(State.currentFrame());
     onFrameChanged();
@@ -3729,65 +3837,69 @@ const UI = (() => {
         <span class="nm">${escapeHtml(f.name)}</span>
         <span class="ic">${f.durationSec ? f.durationSec+'с' : ''}</span>`;
       row.addEventListener('click', () => selectFrameById(f.id));
-      row.addEventListener('dblclick', () => {
-        const name = prompt('Название кадра', f.name);
-        if(name !== null){
-          State.History.tx(() => { f.name = name; });
-          State.save(); renderFrameList(); renderFilmstrip();
-        }
-      });
+      row.addEventListener('dblclick', () => renameFrameById(f.id));
+      row.addEventListener('contextmenu', e => { e.preventDefault(); openFilmCtxMenu(e.clientX, e.clientY, f.id); });
       el.frameList.appendChild(row);
     });
   }
 
+  // Перерисовка плёнки откладывается на кадр анимации: при 20+ кадрах миниатюры
+  // приходят пачкой, и без этого DOM пересобирался бы десятки раз подряд.
+  let filmRaf = 0, filmDragging = false, filmDirty = false;
   function renderFilmstrip(){
+    if(filmDragging){ filmDirty = true; return; }   // не ломаем перетаскивание
+    if(filmRaf) return;
+    filmRaf = requestAnimationFrame(() => { filmRaf = 0; renderFilmstripNow(); });
+  }
+  function renderFilmstripNow(){
     const project = State.get();
     el.filmstrip.innerHTML = '';
+    let currentItem = null;
     project.frames.forEach((f, i) => {
       const item = document.createElement('div');
       item.className = 'filmItem' + (f.id === project.currentFrameId ? ' on' : '');
       item.draggable = true;
       item.dataset.frameId = f.id;
+      item.title = `${i+1}. ${f.name}\nДвойной клик — переименовать · правая кнопка — меню · Alt+клик — дубль`;
       const img = Thumbs.get(f.id);
       if(img && img.complete && img.src){
-        const el2 = document.createElement('img'); el2.src = img.src; item.appendChild(el2);
+        const el2 = document.createElement('img'); el2.src = img.src; el2.draggable = false; item.appendChild(el2);
       }
       const num = document.createElement('span'); num.className = 'num'; num.textContent = i+1;
       const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = f.name;
       item.appendChild(num); item.appendChild(lbl);
+      if(f.durationSec){
+        const du = document.createElement('span'); du.className = 'dur'; du.textContent = f.durationSec + ' с';
+        item.appendChild(du);
+      }
+      if(f.id === project.currentFrameId) currentItem = item;
       item.addEventListener('click', (e) => {
-        if(e.altKey){
-          const copy = JSON.parse(JSON.stringify(f));
-          copy.id = State.uid(); copy.name = f.name + ' (дубль)';
-          State.History.tx(() => { project.frames.splice(i + 1, 0, copy); });
-          State.save(); renderFilmstrip(); renderFrameList();
-          Thumbs.update(copy.id);
-          return;
-        }
+        if(e.altKey){ duplicateFrameById(f.id, false); return; }
         selectFrameById(f.id);
       });
-      item.addEventListener('dblclick', () => {
-        const name = prompt('Название кадра', f.name);
-        if(name !== null){
-          State.History.tx(() => { f.name = name; });
-          State.save(); renderFrameList(); renderFilmstrip();
-        }
-      });
+      item.addEventListener('dblclick', () => renameFrameById(f.id));
       item.addEventListener('contextmenu', e => {
         e.preventDefault();
         openFilmCtxMenu(e.clientX, e.clientY, f.id);
       });
       item.addEventListener('dragstart', e => {
+        filmDragging = true;
         e.dataTransfer.setData('text/framelab', f.id);
         e.dataTransfer.effectAllowed = 'move';
       });
-      item.addEventListener('dragover', e => { e.preventDefault(); item.classList.add('dragTarget'); });
+      item.addEventListener('dragend', () => {
+        filmDragging = false;
+        el.filmstrip.querySelectorAll('.dragTarget').forEach(x => x.classList.remove('dragTarget'));
+        if(filmDirty){ filmDirty = false; renderFilmstrip(); }
+      });
+      item.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; item.classList.add('dragTarget'); });
       item.addEventListener('dragleave', () => item.classList.remove('dragTarget'));
       item.addEventListener('drop', e => {
         e.preventDefault();
         item.classList.remove('dragTarget');
+        filmDragging = false;
         const fromId = e.dataTransfer.getData('text/framelab');
-        if(!fromId || fromId === f.id) return;
+        if(!fromId || fromId === f.id){ if(filmDirty){ filmDirty = false; renderFilmstrip(); } return; }
         State.History.tx(() => {
           const fromIdx = project.frames.findIndex(x => x.id === fromId);
           const toIdx = project.frames.findIndex(x => x.id === f.id);
@@ -3795,10 +3907,18 @@ const UI = (() => {
           const [moved] = project.frames.splice(fromIdx, 1);
           project.frames.splice(toIdx, 0, moved);
         });
-        State.save(); renderFilmstrip(); renderFrameList(); Board.redraw();
+        filmDirty = false;
+        State.save(); renderFilmstripNow(); renderFrameList(); Board.redraw();
       });
       el.filmstrip.appendChild(item);
     });
+    // Текущий кадр должен быть виден в плёнке (прокручиваем сами, не трогая страницу).
+    const film = document.getElementById('film');
+    if(currentItem && film){
+      const fr = film.getBoundingClientRect(), ir = currentItem.getBoundingClientRect();
+      if(ir.left < fr.left) film.scrollLeft -= (fr.left - ir.left) + 8;
+      else if(ir.right > fr.right) film.scrollLeft += (ir.right - fr.right) + 8;
+    }
   }
   /* ============================================================
      Sequence — этап 7: проигрывание раскадровки
@@ -3821,7 +3941,7 @@ const UI = (() => {
     function show(i){
       const a=fs(); if(!a.length)return;
       index=Utils.clamp(i,0,a.length-1);
-      State.get().currentFrameId=a[index].id; State.save();
+      State.switchFrame(a[index].id); State.save();
       SceneManager.rebuild(a[index]); UI.onFrameChanged(); syncUI();
     }
     function next(){
@@ -3857,48 +3977,36 @@ const UI = (() => {
   function openFilmCtxMenu(x, y, frameId){
     const m = el.frameCtxMenu;
     m.innerHTML = '';
+    const frames = State.get().frames;
+    const idx = frames.findIndex(f => f.id === frameId);
     const items = [
-      { label: 'Дублировать', fn: () => {
-        const project = State.get();
-        const idx = project.frames.findIndex(f => f.id === frameId);
-        const copy = JSON.parse(JSON.stringify(project.frames[idx]));
-        copy.id = State.uid(); copy.name = copy.name + ' (дубль)';
-        State.History.tx(() => { project.frames.splice(idx + 1, 0, copy); });
-        State.save(); renderFilmstrip(); renderFrameList();
-        Thumbs.update(copy.id);
-      }},
-      { label: 'Удалить', fn: () => {
-        const project = State.get();
-        if(project.frames.length <= 1){ toast('Нельзя удалить последний'); return; }
-        const idx = project.frames.findIndex(f => f.id === frameId);
-        State.History.tx(() => {
-          project.frames.splice(idx, 1);
-          if(project.currentFrameId === frameId){
-            project.currentFrameId = project.frames[Math.min(idx, project.frames.length - 1)].id;
-          }
-        });
-        State.save();
-        SceneManager.rebuild(State.currentFrame());
-        onFrameChanged(); Thumbs.updateAll();
-      }},
+      { label: 'Открыть кадр', fn: () => selectFrameById(frameId) },
+      { label: 'Переименовать…', fn: () => renameFrameById(frameId) },
+      { label: 'Дублировать', fn: () => duplicateFrameById(frameId, false) },
+      { label: '← Переместить влево', off: idx <= 0, fn: () => moveFrameById(frameId, -1) },
+      { label: 'Переместить вправо →', off: idx < 0 || idx >= frames.length - 1, fn: () => moveFrameById(frameId, 1) },
       { label: 'Заметка…', fn: () => {
-        const project = State.get();
-        const fr = project.frames.find(f => f.id === frameId);
+        const fr = frames.find(f => f.id === frameId);
         const note = prompt('Заметка', fr.notes || '');
         if(note !== null){
           State.History.tx(() => { fr.notes = note; });
-          State.save(); updateFrameMeta();
+          State.save(); updateFrameMeta(); Board.redraw();
         }
-      }}
+      }},
+      { label: 'Удалить', off: frames.length <= 1, fn: () => deleteFrameById(frameId) }
     ];
     for(const it of items){
       const d = document.createElement('div');
       d.className = 'mi'; d.textContent = it.label;
-      d.addEventListener('click', () => { it.fn(); m.classList.remove('show'); });
+      if(it.off){ d.style.opacity = '.4'; d.style.pointerEvents = 'none'; }
+      d.addEventListener('click', () => { m.classList.remove('show'); it.fn(); });
       m.appendChild(d);
     }
-    m.style.left = x + 'px'; m.style.top = y + 'px';
     m.classList.add('show');
+    // Не даём меню уехать за край окна.
+    const w = m.offsetWidth, h = m.offsetHeight;
+    m.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 4)) + 'px';
+    m.style.top = Math.max(4, Math.min(y, window.innerHeight - h - 4)) + 'px';
   }
   window.addEventListener('click', () => el.frameCtxMenu.classList.remove('show'));
 
@@ -3939,77 +4047,120 @@ const UI = (() => {
     return data;
   }
 
+  /* ---------- Диалог выбора (вместо prompt) ---------- */
+  function choiceDialog(title, items){
+    const m = document.createElement('div');
+    m.className = 'modal show';
+    const box = document.createElement('div');
+    box.className = 'modalBox';
+    box.style.width = 'min(420px,92vw)';
+    const h = document.createElement('h2'); h.textContent = title; box.appendChild(h);
+    const close = () => { m.remove(); window.removeEventListener('keydown', onKey, true); };
+    const onKey = e => { if(e.key === 'Escape'){ e.stopPropagation(); close(); } };
+    window.addEventListener('keydown', onKey, true);
+    for(const it of items){
+      const b = document.createElement('button');
+      b.className = 'choiceBtn';
+      b.innerHTML = '<b>' + escapeHtml(it.label) + '</b>' + (it.hint ? '<div class="hint" style="margin:2px 0 0">' + escapeHtml(it.hint) + '</div>' : '');
+      b.addEventListener('click', () => { close(); setTimeout(it.fn, 0); });
+      box.appendChild(b);
+    }
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Отмена'; cancel.style.marginTop = '8px';
+    cancel.addEventListener('click', close);
+    box.appendChild(cancel);
+    m.appendChild(box);
+    m.addEventListener('mousedown', e => { if(e.target === m) close(); });
+    document.body.appendChild(m);
+  }
+
+  function safeFileName(s){
+    return String(s || 'framelab').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').trim().slice(0, 60) || 'framelab';
+  }
+
+  function exportProjectJSON(){
+    const p = State.get();
+    downloadBlob(JSON.stringify(p, null, 2), safeFileName(p.name) + '.framelab.json', 'application/json');
+    toast('JSON проекта сохранён');
+  }
+
+  function importProjectFile(){
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.addEventListener('change', () => {
+      const file = inp.files[0]; if(!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try{
+          if(file.size > 50 * 1024 * 1024) throw new Error('Файл больше 50 МБ');
+          const parsed = validateImportedProject(JSON.parse(reader.result));
+          State.History.tx(() => {
+            const target = State.get();
+            for(const key of Object.keys(target)){
+              if(!Object.prototype.hasOwnProperty.call(parsed, key)) delete target[key];
+            }
+            Object.assign(target, parsed);
+            target.version = Number(target.version) || 5;
+            target.name = String(target.name || 'Untitled');
+            target.units = target.units || 'm';
+            target.settings = { profile:'classic', language:'ru', theme:'dark', ...(target.settings || {}) };
+            target.guides = Array.isArray(target.guides) ? target.guides : [];
+            target.sceneRotation = { rx:0, ry:0, rz:0, ...(target.sceneRotation || {}) };
+            const defaultGrids = State.defaultGrids();
+            target.grids = Object.fromEntries(Object.keys(defaultGrids).map(key => [
+              key, { ...defaultGrids[key], ...((target.grids && target.grids[key]) || {}) }
+            ]));
+            target.boardLayout = {
+              positions: target.boardLayout.positions || {},
+              arrows: target.boardLayout.arrows || []
+            };
+            target.frames.forEach(f => { if(!f.overrides || typeof f.overrides !== 'object') f.overrides = {}; });
+            // Живые объекты должны соответствовать текущему кадру импортированного проекта.
+            State.adoptFrameState(target.frames.find(f => f.id === target.currentFrameId), target);
+          });
+          State.save(); onProjectReload(); toast('Проект загружен');
+        }catch(e){
+          console.warn('FrameLab: import rejected', e);
+          toast('Импорт отменён: ' + (e.message || 'неверный формат файла'));
+        }
+      };
+      reader.readAsText(file);
+    });
+    inp.click();
+  }
+
   function openMenu(which){
     if(which === 'eval'){
       runEvaluationNow();
       toast('Пересчёт оценки…');
     } else if(which === 'file'){
-      const choice = prompt('Файл:\n1 — Экспорт JSON\n2 — Импорт JSON\n3 — Новый проект', '1');
-      if(choice === '1'){
-        downloadBlob(JSON.stringify(State.get(), null, 2), 'framelab.json', 'application/json');
-      } else if(choice === '2'){
-        const inp = document.createElement('input');
-        inp.type = 'file'; inp.accept = '.json';
-        inp.addEventListener('change', () => {
-          const file = inp.files[0]; if(!file) return;
-          const reader = new FileReader();
-          reader.onload = () => {
-            try{
-              if(file.size > 50 * 1024 * 1024) throw new Error('Файл больше 50 МБ');
-              const parsed = validateImportedProject(JSON.parse(reader.result));
-              State.History.tx(() => {
-                const target = State.get();
-                for(const key of Object.keys(target)){
-                  if(!Object.prototype.hasOwnProperty.call(parsed, key)) delete target[key];
-                }
-                Object.assign(target, parsed);
-                target.version = Number(target.version) || 5;
-                target.name = String(target.name || 'Untitled');
-                target.units = target.units || 'm';
-                target.settings = { profile:'classic', language:'ru', theme:'dark', ...(target.settings || {}) };
-                target.guides = Array.isArray(target.guides) ? target.guides : [];
-                target.sceneRotation = { rx:0, ry:0, rz:0, ...(target.sceneRotation || {}) };
-                const defaultGrids = State.defaultGrids();
-                target.grids = Object.fromEntries(Object.keys(defaultGrids).map(key => [
-                  key, { ...defaultGrids[key], ...((target.grids && target.grids[key]) || {}) }
-                ]));
-                target.boardLayout = {
-                  positions: target.boardLayout.positions || {},
-                  arrows: target.boardLayout.arrows || []
-                };
-              });
-              State.save(); onProjectReload(); toast('Проект загружен');
-            }catch(e){
-              console.warn('FrameLab: import rejected', e);
-              toast('Импорт отменён: ' + (e.message || 'неверный формат файла'));
-            }
-          };
-          reader.readAsText(file);
-        });
-        inp.click();
-      } else if(choice === '3'){
-        if(!confirm('Новый проект?')) return;
-        localStorage.removeItem('framelab.project.v5');
-        location.reload();
-      }
+      choiceDialog('Файл', [
+        { label:'Экспорт проекта (JSON)', hint:'Полная копия проекта: объекты, кадры, раскадровка', fn: exportProjectJSON },
+        { label:'Импорт проекта (JSON)', hint:'Заменяет текущий проект (Ctrl+Z вернёт)', fn: importProjectFile },
+        { label:'Новый проект', hint:'Удаляет сохранённый в браузере проект', fn: () => {
+            if(!confirm('Удалить текущий проект и начать новый? Сначала сохраните JSON, если он нужен.')) return;
+            localStorage.removeItem('framelab.project.v5');
+            localStorage.removeItem('framelab.project');
+            location.reload();
+          } }
+      ]);
     } else if(which === 'export'){
       exportDialog();
     } else if(which === 'help'){
-      toast('Хоткеи: 1..9 — кадр, Alt+←/→ — переход, G — сетки, WASD — полёт, F — fit.');
+      toast('Хоткеи: 1..9 — кадр, Alt+←/→ — переход, Ctrl+Alt+D — дубль кадра, G — сетки, WASD — полёт, F — fit.');
     } else {
       toast('Меню «' + which + '» — заглушка');
     }
   }
 
   function exportDialog(){
-    const choice = prompt('Экспорт:\n1 — PNG кадра (без сеток)\n2 — PNG кадра с сетками\n3 — PNG всей раскадровки\n4 — PDF-лист\n5 — JSON', '1');
-    if(choice === '1') exportFramePNG(false);
-    else if(choice === '2') exportFramePNG(true);
-    else if(choice === '3') exportBoardPNG();
-    else if(choice === '4') exportPDF();
-    else if(choice === '5'){
-      downloadBlob(JSON.stringify(State.get(), null, 2), 'framelab.json', 'application/json');
-    }
+    choiceDialog('Экспорт', [
+      { label:'PNG текущего кадра', hint:'Чистая картинка, без сеток', fn: () => exportFramePNG(false) },
+      { label:'PNG текущего кадра с сетками', hint:'С включёнными сетками и оверлеями', fn: () => exportFramePNG(true) },
+      { label:'PNG всей раскадровки', hint:'Все кадры по порядку с подписями и заметками', fn: exportBoardPNG },
+      { label:'PDF — лист раскадровки', hint:'Файл .pdf: по 4 кадра на странице A4, с заметками', fn: exportPDF },
+      { label:'JSON проекта', hint:'Для резервной копии и переноса', fn: exportProjectJSON }
+    ]);
   }
 
   function exportFramePNG(withGrids){
@@ -4045,7 +4196,7 @@ const UI = (() => {
         { ovCentroid: el.ovCentroid.checked, ovBalance: el.ovBalance.checked, ovHeat: el.ovHeat.checked });
       ctx.drawImage(overlay, 0, 0);
     }
-    downloadBlob(null, `frame-${frame.name}.png`, 'image/png', tmp.toDataURL('image/png'));
+    downloadBlob(null, `${safeFileName(State.get().name)}-frame-${State.get().frames.indexOf(frame)+1}-${safeFileName(frame.name)}.png`, 'image/png', tmp.toDataURL('image/png'));
     toast('PNG экспортирован');
   }
 
@@ -4084,7 +4235,7 @@ const UI = (() => {
         const cam = CameraRig.apply(shot, lens);
         r.setSize(W, H, false);
         r.setClearColor(0x000000, 1);
-        r.render(rootGroup, cam);
+        renderWithFrameState(f, () => r.render(rootGroup, cam));
         octx.drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, x, y, W, H);
         octx.fillStyle = '#e6e6e6'; octx.font = 'bold 18px sans-serif';
         octx.fillText(`${i+1}. ${f.name || 'Кадр'}`.slice(0, 52), x, y + H + 24);
@@ -4113,54 +4264,128 @@ const UI = (() => {
     }finally{
       r.dispose();
     }
-    downloadBlob(null, 'storyboard.png', 'image/png', out.toDataURL('image/png'));
+    downloadBlob(null, safeFileName(State.get().name) + '-storyboard.png', 'image/png', out.toDataURL('image/png'));
     toast('PNG раскадровки экспортирован');
   }
 
+  /* ---------- PDF: настоящий файл, без печати через браузер ----------
+     Страница рисуется на canvas (так работает кириллица), сохраняется как JPEG
+     и вкладывается в минимальный PDF. Внешних библиотек нет. */
+  function wrapCanvasText(c, text, maxW, maxLines){
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = []; let line = '';
+    for(const w of words){
+      const cand = line ? line + ' ' + w : w;
+      if(c.measureText(cand).width > maxW && line){ lines.push(line); line = w; }
+      else line = cand;
+    }
+    if(line) lines.push(line);
+    if(lines.length > maxLines){
+      lines.length = maxLines;
+      lines[maxLines - 1] = lines[maxLines - 1].replace(/\s*\S*$/, '') + '…';
+    }
+    return lines;
+  }
+  function buildPdfFromJpegs(pages, wPt, hPt){
+    const enc = new TextEncoder();
+    const chunks = [], offsets = [];
+    let size = 0;
+    const put = d => { const b = typeof d === 'string' ? enc.encode(d) : d; chunks.push(b); size += b.length; };
+    const total = 2 + pages.length * 3;
+    put('%PDF-1.4\n');
+    offsets[1] = size; put('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+    const kids = pages.map((_, i) => `${3 + i*3} 0 R`).join(' ');
+    offsets[2] = size; put(`2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>\nendobj\n`);
+    pages.forEach((p, i) => {
+      const pn = 3 + i*3, cn = pn + 1, im = pn + 2;
+      offsets[pn] = size;
+      put(`${pn} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${wPt} ${hPt}] /Resources << /XObject << /Im0 ${im} 0 R >> >> /Contents ${cn} 0 R >>\nendobj\n`);
+      const content = `q ${wPt} 0 0 ${hPt} 0 0 cm /Im0 Do Q`;
+      offsets[cn] = size;
+      put(`${cn} 0 obj\n<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`);
+      offsets[im] = size;
+      put(`${im} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.data.length} >>\nstream\n`);
+      put(p.data);
+      put('\nendstream\nendobj\n');
+    });
+    const xref = size;
+    let x = `xref\n0 ${total + 1}\n0000000000 65535 f \n`;
+    for(let n = 1; n <= total; n++) x += String(offsets[n]).padStart(10, '0') + ' 00000 n \n';
+    put(x + `trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    return new Blob(chunks, { type: 'application/pdf' });
+  }
+  function dataUrlToBytes(url){
+    const bin = atob(url.slice(url.indexOf(',') + 1));
+    const out = new Uint8Array(bin.length);
+    for(let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
   function exportPDF(){
-    const frames = State.get().frames;
+    const project = State.get();
+    const frames = project.frames;
+    if(!frames.length){ toast('Нет кадров для экспорта'); return; }
+    const PW = 1684, PH = 1191, M = 56, GAP = 40, HEAD = 60;      // A4 альбомная, 2 px = 1 pt
+    const perPage = 4, cols = 2;
+    const cellW = (PW - M*2 - GAP) / cols;
+    const cellH = (PH - M - HEAD - M - GAP) / 2;
+    const capH = 118, imgBoxH = cellH - capH;
+    const pagesN = Math.ceil(frames.length / perPage);
     const rootGroup = SceneManager.getRenderInfo().rootGroup;
     const r = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
-    r.setSize(480, 270, false);
     r.outputColorSpace = THREE.SRGBColorSpace;
-    const cards = [];
-    frames.forEach((f, i) => {
-      const W = 480;
-      const H = Math.round(W * f.aspect[1] / f.aspect[0]);
-      const lens = FrameAdapter.lensOf(f);
-      const shot = FrameAdapter.frameToShot(f);
-      const cam = CameraRig.apply(shot, lens);
-      r.setSize(W, H, false);
-      r.setClearColor(0x000000, 1);
-      r.render(rootGroup, cam);
-      const tmp = document.createElement('canvas');
-      tmp.width = W; tmp.height = H;
-      tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, W, H);
-      cards.push(`<div class="card">
-        <img src="${tmp.toDataURL('image/png')}">
-        <div class="cap">${i+1}. ${escapeHtml(f.name)} · ${f.lens.focalMm} мм · ${f.aspect[0]}:${f.aspect[1]}</div>
-        ${f.notes ? `<div class="note">${escapeHtml(f.notes)}</div>` : ''}
-      </div>`);
-    });
-    r.dispose();
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Раскадровка</title>
-    <style>
-      body{font-family:sans-serif;margin:20px}
-      h1{font-size:18px}
-      .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-      .card{border:1px solid #ccc;padding:6px;page-break-inside:avoid}
-      .card img{width:100%;display:block}
-      .cap{font-size:11px;color:#333;margin-top:4px}
-      .note{font-size:11px;color:#666;font-style:italic;margin-top:2px}
-    </style></head><body>
-    <h1>Раскадровка · FrameLab</h1>
-    <div class="grid">${cards.join('')}</div>
-    </body></html>`;
-    const w = window.open('', '_blank');
-    w.document.write(html);
-    w.document.close();
-    setTimeout(() => w.print(), 300);
-    toast('PDF-лист открыт для печати');
+    const pages = [];
+    try{
+      for(let pg = 0; pg < pagesN; pg++){
+        const cv = document.createElement('canvas'); cv.width = PW; cv.height = PH;
+        const c = cv.getContext('2d');
+        c.fillStyle = '#fff'; c.fillRect(0, 0, PW, PH);
+        c.fillStyle = '#111'; c.font = 'bold 30px sans-serif'; c.textBaseline = 'alphabetic';
+        c.fillText('Раскадровка · ' + (project.name || 'FrameLab'), M, M + 12);
+        c.fillStyle = '#666'; c.font = '20px sans-serif';
+        const pageLbl = `стр. ${pg+1} из ${pagesN} · кадров: ${frames.length}`;
+        c.fillText(pageLbl, PW - M - c.measureText(pageLbl).width, M + 12);
+        for(let k = 0; k < perPage; k++){
+          const i = pg * perPage + k; if(i >= frames.length) break;
+          const f = frames[i];
+          const cx = M + (k % cols) * (cellW + GAP);
+          const cy = M + HEAD + Math.floor(k / cols) * (cellH + GAP);
+          const aspect = Number(f.aspect[0]) / Number(f.aspect[1]) || 16/9;
+          let iw = cellW, ih = iw / aspect;
+          if(ih > imgBoxH){ ih = imgBoxH; iw = ih * aspect; }
+          const RW = 900, RH = Math.max(1, Math.round(RW / aspect));
+          const lens = FrameAdapter.lensOf(f), shot = FrameAdapter.frameToShot(f);
+          const cam = CameraRig.apply(shot, lens);
+          r.setSize(RW, RH, false); r.setClearColor(0x000000, 1);
+          renderWithFrameState(f, () => r.render(rootGroup, cam));
+          c.fillStyle = '#000'; c.fillRect(cx, cy, cellW, imgBoxH);
+          c.drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height,
+                      cx + (cellW - iw)/2, cy + (imgBoxH - ih)/2, iw, ih);
+          c.strokeStyle = '#999'; c.lineWidth = 1; c.strokeRect(cx, cy, cellW, imgBoxH);
+          c.fillStyle = '#111'; c.font = 'bold 24px sans-serif';
+          c.fillText(`${i+1}. ${f.name || 'Кадр'}`.slice(0, 60), cx, cy + imgBoxH + 32);
+          c.fillStyle = '#555'; c.font = '19px sans-serif';
+          c.fillText(`${f.lens?.focalMm ?? '—'} мм · ${f.aspect[0]}:${f.aspect[1]} · ${Number(f.durationSec) || 0} с`, cx, cy + imgBoxH + 58);
+          if(f.notes){
+            c.fillStyle = '#333'; c.font = 'italic 19px sans-serif';
+            wrapCanvasText(c, f.notes, cellW, 2).forEach((ln, n) => c.fillText(ln, cx, cy + imgBoxH + 86 + n * 24));
+          }
+        }
+        pages.push({ data: dataUrlToBytes(cv.toDataURL('image/jpeg', 0.9)), w: PW, h: PH });
+      }
+    }catch(e){
+      console.error('FrameLab: PDF export failed', e);
+      toast('Не удалось собрать PDF');
+      return;
+    }finally{
+      r.dispose();
+    }
+    const blob = buildPdfFromJpegs(pages, PW / 2, PH / 2);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = safeFileName(project.name) + '-storyboard.pdf';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('PDF сохранён (' + pagesN + ' стр.)');
   }
 
   function downloadBlob(data, filename, type, dataUrl){
@@ -4175,6 +4400,7 @@ const UI = (() => {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    if(!dataUrl) setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
   /* ---------- Рендер-цикл ---------- */
@@ -4246,13 +4472,14 @@ const UI = (() => {
     GridOverlay.attach(overlay);
     const objectsInfo = AnalyzerLite.compute(frame);
     const horizonV = AnalyzerLite.horizonV(FrameAdapter.frameToShot(frame), info.lens);
-    const evalOverlay = lastEval ? {
+    const lastOv = lastEval && lastEval.evalOverlay;
+    const evalOverlay = lastOv ? {
       thirds: el.ovEvalThirds.checked,
       heatmapData: el.ovEvalHeat.checked && objectsInfo.heatData ? objectsInfo.heatData : null,
-      nearestThird: lastEval.evalOverlay.nearestThird,
-      edges: el.ovEvalEdges.checked ? lastEval.evalOverlay.edges : [],
-      horizonV: el.ovEvalHorizon.checked ? lastEval.evalOverlay.horizonV : null,
-      horizonGood: lastEval.evalOverlay.horizonGood
+      nearestThird: lastOv.nearestThird,
+      edges: el.ovEvalEdges.checked ? (lastOv.edges || []) : [],
+      horizonV: el.ovEvalHorizon.checked ? lastOv.horizonV : null,
+      horizonGood: lastOv.horizonGood
     } : null;
     GridOverlay.draw(
       W, H, info.rect, State.get().grids,
@@ -4934,7 +5161,10 @@ const UI = (() => {
       toast(any ? 'Сетки выключены' : 'Сетки включены');
       return;
     }
-    if(key.toLowerCase() === 'f' && !ctrl){ SceneManager.fitView(); return; }
+    if(key.toLowerCase() === 'f' && !ctrl){
+      if(viewMode === 'board') Board.fit(); else SceneManager.fitView();
+      return;
+    }
     if(key.toLowerCase() === 'e' && !ctrl && !e.altKey){
       // E — пересчитать оценку
       runEvaluationNow();
@@ -4959,8 +5189,9 @@ const UI = (() => {
   function doUndo(){ if(State.History.undo()) { toast('Откат'); scheduleEval(); } else toast('Нечего откатывать'); }
   function doRedo(){ if(State.History.redo()) { toast('Возврат'); scheduleEval(); } else toast('Нечего возвращать'); }
 
-  return { init, toast, renderObjectList, renderProps, refreshCameraUI,
+  return { init, toast, Sequence, renderObjectList, renderProps, refreshCameraUI,
            buildGridPanel, renderFilmstrip, renderFrameList, onFrameChanged, selectFrameById,
+           openFrameMenu: openFilmCtxMenu, renameFrame: renameFrameById, duplicateFrame: duplicateFrameById, deleteFrame: deleteFrameById,
            scheduleEval, runEvaluationNow };
 })();
 
@@ -5002,8 +5233,12 @@ const Board = (() => {
     wrap.addEventListener('pointerdown', onDown);
     wrap.addEventListener('pointermove', onMove);
     wrap.addEventListener('pointerup', onUp);
+    wrap.addEventListener('pointercancel', onUp);
     wrap.addEventListener('wheel', onWheel, { passive: false });
-    wrap.addEventListener('contextmenu', e => e.preventDefault());
+    wrap.addEventListener('dblclick', onDbl);
+    wrap.addEventListener('contextmenu', onCtx);
+    document.getElementById('boardFit')?.addEventListener('click', () => fit());
+    document.getElementById('boardReset')?.addEventListener('click', () => resetLayout());
     resize(); layout(); loop();
   }
   function resize(){
@@ -5064,6 +5299,12 @@ const Board = (() => {
       ctx.fillStyle = '#e6e6e6';
       ctx.font = `${14/view.scale}px sans-serif`;
       ctx.fillText(`${i+1}. ${f.name}`, pos.x, pos.y + pos.h + 18/view.scale);
+      if(f.durationSec){
+        ctx.fillStyle = '#a0a0a0';
+        ctx.font = `${11/view.scale}px sans-serif`;
+        const t = f.durationSec + ' с';
+        ctx.fillText(t, pos.x + pos.w - ctx.measureText(t).width, pos.y + pos.h + 18/view.scale);
+      }
     });
     for(const a of arrows){
       const p1 = positions.get(a.from), p2 = positions.get(a.to);
@@ -5091,6 +5332,7 @@ const Board = (() => {
     return null;
   }
   function onDown(e){
+    if(e.button === 2) return;   // правая кнопка — только меню
     if(e.button === 1 || e.shiftKey){
       dragging = { mode: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
       wrap.setPointerCapture(e.pointerId); e.preventDefault(); return;
@@ -5109,8 +5351,69 @@ const Board = (() => {
       selectFrame(id);
       dragging = { mode: 'move', id, offx: w.x - pos.x, offy: w.y - pos.y };
       wrap.setPointerCapture(e.pointerId);
+    } else {
+      // Пустое место — панорама холста (как «рука» в Illustrator).
+      dragging = { mode: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+      wrap.style.cursor = 'grabbing';
+      wrap.setPointerCapture(e.pointerId);
     }
   }
+  function onDbl(e){
+    const rect = wrap.getBoundingClientRect();
+    const w = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+    const id = hitFrame(w.x, w.y);
+    if(!id) return;
+    UI.selectFrameById(id);
+    document.querySelector('#tabs button[data-tab="split"]')?.click();
+  }
+  function distToSegment(px, py, x1, y1, x2, y2){
+    const dx = x2 - x1, dy = y2 - y1, l2 = dx*dx + dy*dy;
+    let t = l2 ? ((px - x1)*dx + (py - y1)*dy) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t*dx), py - (y1 + t*dy));
+  }
+  function onCtx(e){
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const w = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+    const id = hitFrame(w.x, w.y);
+    if(id){ UI.openFrameMenu(e.clientX, e.clientY, id); return; }
+    const tol = 8 / view.scale;
+    const hit = arrows.findIndex(a => {
+      const p1 = positions.get(a.from), p2 = positions.get(a.to);
+      return p1 && p2 && distToSegment(w.x, w.y, p1.x + p1.w, p1.y + p1.h/2, p2.x, p2.y + p2.h/2) < tol;
+    });
+    if(hit >= 0){
+      arrows.splice(hit, 1);
+      saveLayout(); draw();
+      UI.toast('Стрелка удалена');
+    }
+  }
+  // Показать всю раскадровку в окне.
+  function fit(){
+    layout();
+    if(!positions.size) return;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    positions.forEach(p => {
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+      x1 = Math.max(x1, p.x + p.w); y1 = Math.max(y1, p.y + p.h + 30);
+    });
+    const W = wrap.clientWidth, H = wrap.clientHeight, pad = 40;
+    const sc = Utils.clamp(Math.min((W - pad*2) / Math.max(1, x1 - x0), (H - pad*2) / Math.max(1, y1 - y0)), 0.2, 1.5);
+    view.scale = sc;
+    view.x = (W - (x1 - x0) * sc) / 2 - x0 * sc;
+    view.y = (H - (y1 - y0) * sc) / 2 - y0 * sc;
+  }
+  // Вернуть автоматическую раскладку сеткой (позиции и порядок номеров совпадают).
+  function resetLayout(){
+    const data = boardData();
+    data.positions = {};
+    positions.clear();
+    layout();
+    saveLayout();
+    fit();
+  }
+  function repaint(){ if(wrap) draw(); }
   function onMove(e){
     if(!dragging && !arrowStart) return;
     const rect = wrap.getBoundingClientRect();
@@ -5138,6 +5441,7 @@ const Board = (() => {
       Board.redraw();
     }
     if(dragging?.mode === 'move') saveLayout();
+    if(dragging?.mode === 'pan') wrap.style.cursor = '';
     dragging = null;
     if(!arrowStart) Board.redraw();
   }
@@ -5153,14 +5457,15 @@ const Board = (() => {
     view.y += (after.y - before.y) * view.scale;
   }
   function selectFrame(id){
-    State.get().currentFrameId = id;
-    State.save();
-    SceneManager.rebuild(State.currentFrame());
-    UI.onFrameChanged();
+    if(State.get().currentFrameId === id) return;
+    UI.selectFrameById(id);
   }
-  function enter(){ layout(); view.x = 40; view.y = 40; view.scale = 1; }
-  function redraw(){ layout(); draw(); }
-  return { init, enter, redraw, selectFrame };
+  function enter(){ layout(); fit(); }
+  function redraw(){
+    if(dragging) { draw(); return; }   // не пересчитываем позиции, пока кадр тащат мышью
+    layout(); if(wrap) draw();
+  }
+  return { init, enter, redraw, repaint, fit, selectFrame };
 })();
 
 /* ============================================================
@@ -5186,13 +5491,32 @@ const Thumbs = (() => {
     renderer.setSize(w,h,false);
     return renderer;
   }
+  // Миниатюры пересчитываются по одной, с паузой между кадрами: при 20+ кадрах
+  // интерфейс не замирает, а плёнка перерисовывается пачкой.
+  let allToken = 0;
   function updateAll(){
-    for(const f of State.get().frames) update(f.id);
+    const token = ++allToken;
+    const ids = State.get().frames.map(f => f.id);
+    let i = 0;
+    (function step(){
+      if(token !== allToken || i >= ids.length) return;
+      update(ids[i++]);
+      setTimeout(step, 0);
+    })();
+  }
+  // Обновить миниатюру текущего кадра после правок (с задержкой, чтобы не рендерить на каждый шаг).
+  let curTimer = null;
+  function scheduleCurrent(){
+    clearTimeout(curTimer);
+    curTimer = setTimeout(() => {
+      const id = State.get().currentFrameId;
+      if(id) update(id);
+    }, 450);
   }
   function update(frameId){
     const frame = State.get().frames.find(f => f.id === frameId);
     if(!frame) return;
-    const w = 320, h = Math.round(w * frame.aspect[1] / frame.aspect[0]);
+    const w = 320, h = Math.max(1, Math.round(w * frame.aspect[1] / frame.aspect[0]));
     const tmp = document.createElement('canvas');
     tmp.width = w; tmp.height = h;
     const rootGroup = SceneManager.getRenderInfo().rootGroup;
@@ -5200,11 +5524,11 @@ const Thumbs = (() => {
     const shot = FrameAdapter.frameToShot(frame);
     const cam = CameraRig.apply(shot, lens);
     const r = getRenderer(w,h);
-    r.render(rootGroup, cam);
+    renderWithFrameState(frame, () => r.render(rootGroup, cam));
     tmp.getContext('2d').drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, 0, 0, w, h);
-    const url = tmp.toDataURL('image/png');
+    const url = tmp.toDataURL('image/jpeg', 0.85);
     const img = cache.get(frameId) || new Image();
-    img.onload = () => { UI.renderFilmstrip(); if(viewBoardActive()) Board.redraw(); };
+    img.onload = () => { UI.renderFilmstrip(); if(viewBoardActive()) Board.repaint(); };
     img.src = url;
     cache.set(frameId, img);
   }
@@ -5213,8 +5537,20 @@ const Thumbs = (() => {
     const v = document.getElementById('viewBoard');
     return v && v.style.display === 'block';
   }
-  return { updateAll, update, get };
+  function forget(frameId){ cache.delete(frameId); }
+  return { updateAll, update, scheduleCurrent, get, forget };
 })();
+
+// Показывает объекты в состоянии указанного кадра на время fn() (миниатюры, экспорт),
+// затем возвращает сцену в состояние текущего кадра.
+function renderWithFrameState(frame, fn){
+  // Текущий кадр уже показан «живыми» объектами: ничего не трогаем
+  // (иначе можно сбросить объект, который сейчас тянут мышью).
+  if(frame && frame.id === State.get().currentFrameId) return fn();
+  SceneManager.applyFrameState(frame);
+  try{ return fn(); }
+  finally{ SceneManager.applyFrameState(State.currentFrame()); }
+}
 
 /* ============================================================
    Тесты
@@ -5279,16 +5615,55 @@ function runTests(){
   {
     const b = Evaluator._test.s_balance({u:0.5,v:0.5});
     t('S_balance в центре', b, 1, 0.0001);
-    const f = Evaluator._test.s_focus(0.9);
+    const f = Evaluator._test.s_focus({ map: new Float32Array(16).fill(1/16), W:4, H:4 }, { u0:0, u1:0.5, v0:0, v1:0.5 });
     ok('S_focus API работает', Number.isFinite(f.s) && Number.isFinite(f.frac));
-    const cl = Evaluator._test.s_clarity(0.8);
-    ok('S_clarity API работает', Number.isFinite(cl));
+    const cl = Evaluator._test.s_clarity({ map: new Float32Array(16).fill(0.1), W:4, H:4 });
+    ok('S_clarity API работает', !!cl && Number.isFinite(cl.s));
   }
 
   // Горизонт
   {
     const v = AnalyzerLite.horizonV({ pitch:0 }, { fovV:27 });
     t('Горизонт pitch=0', v, 0.5, 0.001);
+  }
+
+  /* ---- Этап 4: кадры, порядок, состояние объектов по кадрам ---- */
+  {
+    const mk = () => ({ id:'a', transform:{ pos:[0,0,0], rotEuler:[0,0,0], scale:[1,1,1] }, color:{ r:10, g:20, b:30 }, visible:true });
+    const P = { objects:[mk()], frames:[{ id:'f1', overrides:{} }, { id:'f2', overrides:{} }], currentFrameId:'f1' };
+    P.objects[0].transform.pos = [1,0,0];
+    P.frames[1].overrides = State.snapshotObjects(P);          // как при создании кадра: копия состояния
+    State.switchFrame('f2', P);
+    P.objects[0].transform.pos = [5,0,0];                       // правка в кадре 2
+    State.switchFrame('f1', P);
+    ok('Кадр 1 не изменился после правки в кадре 2', P.objects[0].transform.pos[0] === 1);
+    State.switchFrame('f2', P);
+    ok('Кадр 2 сохранил своё положение', P.objects[0].transform.pos[0] === 5);
+    ok('У текущего кадра нет overrides (он и есть живые объекты)', Object.keys(P.frames[1].overrides).length === 0);
+
+    // 20 кадров: создание, обход, перестановка, JSON-круг.
+    const Q = { objects:[mk()], frames:[{ id:'k0', name:'К0', overrides:{} }], currentFrameId:'k0' };
+    for(let i = 1; i < 20; i++){
+      Q.objects[0].transform.pos = [i - 1, 0, 0];
+      const f = { id:'k' + i, name:'К' + i, overrides: State.snapshotObjects(Q) };
+      Q.frames.push(f);
+      State.switchFrame(f.id, Q);
+      Q.objects[0].transform.pos = [i, 0, 0];                  // у кадра i положение i
+    }
+    let okAll = true;
+    for(let round = 0; round < 2; round++){
+      for(let i = 0; i < 20; i++){
+        State.switchFrame('k' + i, Q);
+        if(Q.objects[0].transform.pos[0] !== i) okAll = false;
+      }
+    }
+    ok('20 кадров: у каждого своё состояние после обхода', okAll);
+    const [mv] = Q.frames.splice(3, 1); Q.frames.splice(10, 0, mv);
+    const Q2 = JSON.parse(JSON.stringify(Q));
+    ok('Порядок кадров сохраняется после перестановки и JSON', Q2.frames.map(f => f.id).join() === Q.frames.map(f => f.id).join() && Q2.frames[10].id === 'k3');
+    State.switchFrame('k7', Q2);
+    ok('Состояние кадра сохраняется после JSON-круга', Q2.objects[0].transform.pos[0] === 7);
+    ok('Все кадры сохранены (20)', Q2.frames.length === 20);
   }
 
   const passed = results.filter(r => r.ok).length;
@@ -5318,7 +5693,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   Board.init();
   UI.init();
-  Sequence.init();
+  UI.Sequence.init();   // Sequence объявлен внутри UI: без этого запуск обрывался и сцена оставалась пустой
 
   const project = State.get();
   if(project.objects.length === 0){
