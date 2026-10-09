@@ -843,7 +843,20 @@ const State = (() => {
       project.currentFrameId = project.frames[0].id;
     }
     project.frames.forEach(f => { if(!f.overrides || typeof f.overrides !== 'object') f.overrides = {}; });
-    adoptFrameState(project.frames.find(f => f.id === project.currentFrameId), project);
+
+    // Миграция старых проектов: если у неактивных кадров нет снимка объектов,
+    // зафиксировать их прежнее общее состояние, чтобы дальнейшие правки кадров
+    // не продолжали протекать между ними. Уже существующие снимки не трогаем.
+    const current = project.frames.find(f => f.id === project.currentFrameId);
+    const baseline = snapshotObjects(project);
+    for(const frame of project.frames){
+      if(frame.id !== project.currentFrameId && Object.keys(frame.overrides).length === 0){
+        frame.overrides = JSON.parse(JSON.stringify(baseline));
+      }
+    }
+    if(current && Object.keys(current.overrides).length){
+      adoptFrameState(current, project);
+    }
     return project;
   }
   function save(){
