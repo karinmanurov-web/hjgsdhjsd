@@ -2713,73 +2713,47 @@ const Evaluator = (() => {
   }
 
   function s_edges(frame, lens, cam){
-    // Проекции bbox объектов на кадр. Определяем касание края.
+    // Единый проектор учитывает вращение, масштаб и frame overrides.
+    // Сохраняем необрезанные границы, иначе долю обрезки вычислить нельзя.
     const result = { touches: [], cuts: [], penalty: 0 };
     const root = SceneManager.getRenderInfo().rootGroup;
-    const project = new THREE.Vector3();
-    for(const obj of State.get().objects){
-      const ov = frame.overrides?.[obj.id] || {};
-      const visible = ov.visible !== undefined ? ov.visible : obj.visible;
-      if(visible === false) continue;
-      if(obj.role === 'guide') continue;
-      const eff = { transform: ov.transform ? {...obj.transform, ...ov.transform} : obj.transform,
-                    color: ov.color ? {...obj.color, ...ov.color} : obj.color };
-      const center = new THREE.Vector3(...eff.transform.pos);
-      const size = AnalyzerLite.guessObjectSize(obj);
-      const corners = [
-        [-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],
-        [-1,-1, 1],[1,-1, 1],[-1,1, 1],[1,1, 1]
-      ].map(([sx,sy,sz]) => new THREE.Vector3(
-        center.x + sx*size.x/2, center.y + sy*size.y/2, center.z + sz*size.z/2
-      ).applyMatrix4(root.matrixWorld));
-      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-      let anyInside = false;
-      for(const c of corners){
-        project.copy(c).project(cam);
-        const u = (project.x + 1)/2;
-        const v = (1 - project.y)/2;
-        if(u < uMin) uMin = u; if(u > uMax) uMax = u;
-        if(v < vMin) vMin = v; if(v > vMax) vMax = v;
-        if(u >= 0 && u <= 1 && v >= 0 && v <= 1) anyInside = true;
-      }
-      if(!anyInside) continue;
-      const u0 = uMin, u1 = uMax, v0 = vMin, v1 = vMax;
-      const W = 1, H = 1;
-      // Касания: bbox пересекает край на < 2% от меньшей стороны
+    root.updateMatrixWorld(true);
+    cam.updateMatrixWorld(true);
+    for(const obj of (State.get().objects || [])){
+      const box = computeObjectScreenBBox(obj, frame, cam, root);
+      if(!box) continue;
+      const u0=box.rawU0, u1=box.rawU1, v0=box.rawV0, v1=box.rawV1;
+      if(u1<=0 || u0>=1 || v1<=0 || v0>=1) continue;
       const edges = [
-        { e: 'left',   d: u0 },
-        { e: 'right',  d: 1 - u1 },
-        { e: 'top',    d: v0 },
-        { e: 'bottom', d: 1 - v1 }
+        {e:'left',d:u0,active:u0>=0 && u0<0.02},
+        {e:'right',d:1-u1,active:u1<=1 && 1-u1<0.02},
+        {e:'top',d:v0,active:v0>=0 && v0<0.02},
+        {e:'bottom',d:1-v1,active:v1<=1 && 1-v1<0.02}
       ];
-      // Для касаний — если |d| < 0.02 и bbox не срезан существенно
       for(const ed of edges){
-        if(Math.abs(ed.d) < 0.02){
-          result.touches.push({ objId: obj.id, edge: ed.e, x: ed.e === 'left' ? 0 : ed.e === 'right' ? 1 : (u0+u1)/2,
-                                y: ed.e === 'top' ? 0 : ed.e === 'bottom' ? 1 : (v0+v1)/2,
-                                type: 'touch', r: 10 });
-          result.penalty += 0.15;
+        if(!ed.active) continue;
+        result.touches.push({
+          objId:obj.id, edge:ed.e,
+          x:ed.e==='left'?0:ed.e==='right'?1:Utils.clamp((u0+u1)/2,0,1),
+          y:ed.e==='top'?0:ed.e==='bottom'?1:Utils.clamp((v0+v1)/2,0,1),
+          type:'touch',r:10
+        });
+        result.penalty+=0.15;
+      }
+      const totalW=u1-u0, totalH=v1-v0;
+      if(totalW>0 && totalH>0 && (obj.role==='main' || obj.role==='secondary')){
+        const inW=Math.max(0,Math.min(1,u1)-Math.max(0,u0));
+        const inH=Math.max(0,Math.min(1,v1)-Math.max(0,v0));
+        const cutFrac=Utils.clamp(1-(inW*inH)/(totalW*totalH),0,1);
+        if(cutFrac>0.03 && cutFrac<0.25){
+          result.cuts.push({objId:obj.id,frac:cutFrac});
+          result.penalty+=0.2;
+          result.touches.push({objId:obj.id,type:'cut',
+            x:Utils.clamp((u0+u1)/2,0,1),y:Utils.clamp((v0+v1)/2,0,1),r:12});
         }
       }
-      // Обрезка: если bbox выходит за кадр и срезано 3-25% площади
-      const totalW = u1 - u0, totalH = v1 - v0;
-      if(totalW > 0 && totalH > 0){
-        const inW = Math.min(1, u1) - Math.max(0, u0);
-        const inH = Math.min(1, v1) - Math.max(0, v0);
-        const fracIn = (inW * inH) / (totalW * totalH);
-        const cutFrac = 1 - fracIn;
-        if(cutFrac > 0.03 && cutFrac < 0.25 && (obj.role === 'main' || obj.role === 'secondary')){
-          result.cuts.push({ objId: obj.id, frac: cutFrac });
-          result.penalty += 0.2;
-          // Показать в оверлее
-          result.touches.push({ objId: obj.id, type: 'cut',
-            x: Utils.clamp((u0+u1)/2, 0, 1), y: Utils.clamp((v0+v1)/2, 0, 1), r: 12 });
-        }
-      }
-      void W; void H;
     }
-    const s = Utils.clamp(1 - result.penalty, 0, 1);
-    return { s, ...result };
+    return {s:Utils.clamp(1-result.penalty,0,1),...result};
   }
 
   function s_horizon(frame, lens, shot){
@@ -2862,12 +2836,23 @@ const Evaluator = (() => {
       points.push({u:(p.x+1)/2, v:(1-p.y)/2});
     }
     if(!points.length) return null;
-    const u0 = Math.max(0, Math.min(...points.map(p=>p.u)));
-    const u1 = Math.min(1, Math.max(...points.map(p=>p.u)));
-    const v0 = Math.max(0, Math.min(...points.map(p=>p.v)));
-    const v1 = Math.min(1, Math.max(...points.map(p=>p.v)));
+    const rawU0 = Math.min(...points.map(p=>p.u));
+    const rawU1 = Math.max(...points.map(p=>p.u));
+    const rawV0 = Math.min(...points.map(p=>p.v));
+    const rawV1 = Math.max(...points.map(p=>p.v));
+    const u0 = Math.max(0, rawU0);
+    const u1 = Math.min(1, rawU1);
+    const v0 = Math.max(0, rawV0);
+    const v1 = Math.min(1, rawV1);
     if(u1 <= u0 || v1 <= v0) return null;
-    return {u0, u1, v0, v1, u:(u0+u1)/2, v:(v0+v1)/2, area:(u1-u0)*(v1-v0)};
+    return {u0,u1,v0,v1,rawU0,rawU1,rawV0,rawV1,
+      u:(u0+u1)/2,v:(v0+v1)/2,area:(u1-u0)*(v1-v0)};
+  }
+
+  // Правило третей оценивает положение главного объекта;
+  // баланс отдельно использует центр масс всей композиции.
+  function compositionScorePoint(mainBBox, centroid){
+    return mainBBox ? {u:mainBBox.u,v:mainBBox.v} : centroid;
   }
 
   function weightedCompositionCentroid(items){
@@ -2911,8 +2896,10 @@ const Evaluator = (() => {
     const mainBBox = computeMainObjBBox(frame, cam);
     const centroid = computeCompositionCentroid(frame, cam, mainBBox);
 
-    // 9.1 Трети
-    const thirds = s_thirds_fromPoint(centroid.u, centroid.v);
+    // 9.1 Трети оцениваем по центру главного объекта,
+    // а не по центру масс всей сцены (он нужен критерию баланса).
+    const thirdsPoint = compositionScorePoint(mainBBox, centroid);
+    const thirds = s_thirds_fromPoint(thirdsPoint.u, thirdsPoint.v);
     const S_thirds = thirds.s;
 
     // 9.3 Баланс
@@ -2933,7 +2920,7 @@ const Evaluator = (() => {
     const criteria = [
       { id:'thirds', name:'Правило третей',
         s: S_thirds,
-        why: `Главный объект на (${centroid.u.toFixed(2)}, ${centroid.v.toFixed(2)}), ближайшая силовая точка — (${thirds.nearest[0].toFixed(2)}, ${thirds.nearest[1].toFixed(2)}), расстояние ${thirds.d.toFixed(2)}.`,
+        why: `Главный объект на (${thirdsPoint.u.toFixed(2)}, ${thirdsPoint.v.toFixed(2)}), ближайшая силовая точка — (${thirds.nearest[0].toFixed(2)}, ${thirds.nearest[1].toFixed(2)}), расстояние ${thirds.d.toFixed(2)}.`,
         act: S_thirds < 0.7 ? `Подвести главный объект ближе к силовой точке (${thirds.nearest[0].toFixed(2)}, ${thirds.nearest[1].toFixed(2)}).` : null,
         _viz: { nearestThird: { u: thirds.nearest[0], v: thirds.nearest[1] } }
       },
@@ -3002,7 +2989,7 @@ const Evaluator = (() => {
     };
   }
 
-  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid } };
+  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint } };
 })();
 
 /* ============================================================
@@ -5891,6 +5878,13 @@ function runTests(){
       {u:NaN,v:0.5,area:1}
     ]);
     ok('Центр композиции: пустые/некорректные массы игнорируются', empty === null);
+    const mainPoint = Evaluator._test.compositionScorePoint(
+      {u:0.32,v:0.41}, {u:0.58,v:0.62}
+    );
+    t('Правило третей использует центр главного объекта', mainPoint.u, 0.32, 0.001);
+    t('Правило третей не подменяется общим центром масс', mainPoint.v, 0.41, 0.001);
+    const fallbackPoint = Evaluator._test.compositionScorePoint(null, {u:0.5,v:0.5});
+    t('Правило третей: fallback при отсутствии главного объекта', fallbackPoint.u, 0.5, 0.001);
   }
 
   // Базовые evaluator API
