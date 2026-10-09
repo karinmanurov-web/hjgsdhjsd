@@ -3229,7 +3229,22 @@ const ImproveEngine = (() => {
     };
   }
 
-  function apply(result){
+  function blendFrame(current, next, fraction=1){
+    const t=clamp(Number.isFinite(fraction)?fraction:1,0,1);
+    const lerp=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)?a+(b-a)*t:b;
+    const out=cloneFrame(current);
+    if(t>=1){ out.camera=cloneFrame(next.camera); out.lens=cloneFrame(next.lens); return out; }
+    out.camera={...out.camera,...next.camera,
+      pos:out.camera.pos.map((v,i)=>lerp(v,next.camera.pos[i])),
+      target:out.camera.target.map((v,i)=>lerp(v,next.camera.target[i])),
+      yaw:lerp(out.camera.yaw,next.camera.yaw),
+      pitch:lerp(out.camera.pitch,next.camera.pitch),
+      roll:lerp(out.camera.roll,next.camera.roll)};
+    out.lens={...out.lens,...next.lens,focalMm:lerp(out.lens.focalMm,next.lens.focalMm)};
+    return out;
+  }
+
+  function apply(result, fraction=1){
     if(!result?.changed || !result.best?.frame) return false;
     const current=State.currentFrame();
     if(!current?.camera || !current?.lens) return false;
@@ -3237,7 +3252,7 @@ const ImproveEngine = (() => {
     if(result.sourceFrameId && current.id!==result.sourceFrameId) return false;
     if(result._test?.baselineCamera && JSON.stringify(current.camera)!==result._test.baselineCamera) return false;
     if(result._test?.baselineLens && JSON.stringify(current.lens)!==result._test.baselineLens) return false;
-    const next=result.best.frame;
+    const next=blendFrame(current,result.best.frame,fraction);
     State.History.tx(()=>{
       current.camera=JSON.parse(JSON.stringify(next.camera));
       current.lens=JSON.parse(JSON.stringify(next.lens));
@@ -3246,7 +3261,7 @@ const ImproveEngine = (() => {
     return true;
   }
 
-  return {improve,apply,_test:{candidates,score}};
+  return {improve,apply,_test:{candidates,score,blendFrame}};
 })();
 
 /* ============================================================
@@ -3668,11 +3683,28 @@ const UI = (() => {
           const b=Math.round(result.before.total*100);
           const weak=result.weakCriterion;
           const hasGain=result.changed && result.best;
+          const changeText=(c)=>{
+            const f=c.candidate.frame, d=c.candidate.delta||{};
+            const fmt=(v)=>Number(v).toFixed(2);
+            if(c.kind==='lens') return 'Фокусное: '+fmt(frame.lens.focalMm)+' → '+fmt(f.lens.focalMm)+' мм';
+            if(c.kind==='target'){
+              const i=d.axis==='x'?0:1, name=d.axis==='x'?'X':'Y';
+              return 'Цель '+name+': '+fmt(frame.camera.target[i])+' → '+fmt(f.camera.target[i])+' м';
+            }
+            if(c.kind==='camera' && ['x','y','z'].includes(String(d.axis).toLowerCase())){
+              const i={x:0,y:1,z:2}[String(d.axis).toLowerCase()];
+              return 'Камера '+String(d.axis).toUpperCase()+': '+fmt(frame.camera.pos[i])+' → '+fmt(f.camera.pos[i])+' м';
+            }
+            if(c.kind==='camera' && ['yaw','pitch','roll'].includes(d.axis))
+              return d.axis.toUpperCase()+': '+fmt(frame.camera[d.axis])+'° → '+fmt(f.camera[d.axis])+'°';
+            return 'Было → стало: параметры камеры/объектива';
+          };
           const alternatives=(result.alternatives||[]).slice(0,3).map((c,i)=>
             '<div class="iaAlt" style="border-top:1px solid #343438;padding-top:6px;margin-top:6px">'+
               '<div class="iaHead"><span>'+(i+1)+'. '+escapeHtml(c.label)+'</span><span class="iaMuted">'+Math.round(c.total*100)+'%</span></div>'+
+              '<div class="iaMuted">'+escapeHtml(changeText(c))+'</div>'+
               '<div class="iaMuted">'+(c.deltaScore>=0?'+':'')+Math.round(c.deltaScore*100)+' п.п. к текущей оценке</div>'+
-              '<button class="iaTry" data-variant="'+i+'" style="margin-top:4px;width:100%">'+(c.deltaScore>0.002?'Применить улучшение':'Попробовать этот вариант')+'</button>'+
+              '<div class="iaActions" style="margin-top:4px"><button class="iaTry" data-variant="'+i+'" data-fraction="1">'+(c.deltaScore>0.002?'Применить':'Попробовать')+'</button><button class="iaTry" data-variant="'+i+'" data-fraction="0.5">Применить половину шага</button></div>'+
             '</div>'
           ).join('');
           el.improveBox.innerHTML='<div class="iaHead"><span>'+(hasGain?'Найдено улучшение':'Заметного улучшения не найдено')+'</span><span class="iaMuted">'+result.checked+' вариантов</span></div>'+
@@ -3686,7 +3718,8 @@ const UI = (() => {
               const choice=result.alternatives?.[Number(btn.dataset.variant)]?.candidate;
               if(!choice){toast('Вариант недоступен. Пересчитай улучшение.');return;}
               const chosen={...result,changed:true,best:choice};
-              const applied=ImproveEngine.apply(chosen);
+              const fraction=Number(btn.dataset.fraction||1);
+              const applied=ImproveEngine.apply(chosen,fraction);
               if(!applied){toast('Кадр изменился. Построй предложение заново.');return;}
               el.improveBox.style.display='none';
               refreshCameraUI();
@@ -5963,6 +5996,9 @@ function runTests(){
       ok('ImproveEngine: предложение строго лучше порога либо отсутствует',result.changed ? result.best.result.total>result.before.total+0.002 : result.best===null);
       ok('ImproveEngine: три альтернативы доступны даже без улучшения',result.alternatives.length===Math.min(3,pool.length)&&result.alternatives.every(a=>!!a.candidate?.frame));
       ok('ImproveEngine: исходный кадр не меняется после оценки',JSON.stringify(source)===before);
+      const blend=ImproveEngine._test.blendFrame({camera:{pos:[0,0,0],target:[0,0,0],yaw:0,pitch:0,roll:0},lens:{focalMm:50}},{camera:{pos:[2,0,0],target:[0,0,0],yaw:10,pitch:0,roll:0},lens:{focalMm:70}},0.5);
+      t('ImproveEngine: половинное применение камеры',blend.camera.pos[0],1,0.001);
+      t('ImproveEngine: половинное применение объектива',blend.lens.focalMm,60,0.001);
       ok('ImproveEngine: до трёх альтернатив отсортированы по баллу',result.alternatives.length<=3&&result.alternatives.every((a,i,arr)=>i===0||arr[i-1].total>=a.total));
     }catch(e){
       ok('ImproveEngine: оценка кандидатов выполняется без ошибки',false);
