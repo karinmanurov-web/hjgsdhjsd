@@ -2888,6 +2888,46 @@ const Evaluator = (() => {
     return weightedCompositionCentroid(items) ||
       (mainBBox ? {u:mainBBox.u, v:mainBBox.v} : {u:0.5, v:0.5});
   }
+  // Аналитические ID/depth-карты по проекциям объектов. Это быстрые карты
+  // ограничивающих прямоугольников, а не пиксельно-точный GPU-render pass.
+  function rasterizeIDDepthMap(projected, W=64, H=36){
+    const ids = new Uint16Array(W*H);
+    const depth = new Float32Array(W*H);
+    depth.fill(Infinity);
+    for(let i=0;i<projected.length;i++){
+      const b=projected[i];
+      if(!b || !Number.isFinite(b.depth)) continue;
+      const x0=Math.max(0,Math.floor(b.u0*W)), x1=Math.min(W-1,Math.ceil(b.u1*W)-1);
+      const y0=Math.max(0,Math.floor(b.v0*H)), y1=Math.min(H-1,Math.ceil(b.v1*H)-1);
+      if(x1<x0 || y1<y0) continue;
+      for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++){
+        const k=y*W+x;
+        if(b.depth<depth[k]){ depth[k]=b.depth; ids[k]=i+1; }
+      }
+    }
+    for(let i=0;i<depth.length;i++) if(!Number.isFinite(depth[i])) depth[i]=0;
+    return {ids,depth,W,H,objectIds:projected.map(b=>b?.id||null)};
+  }
+  function buildIDDepthMaps(frame, cam, W=64, H=null){
+    if(!H) H=Math.max(2,Math.round(W*frame.aspect[1]/frame.aspect[0]));
+    const root=SceneManager.getRenderInfo().rootGroup;
+    root.updateMatrixWorld(true); cam.updateMatrixWorld(true);
+    const cameraPos=new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+    const projected=[];
+    for(const obj of (State.get().objects||[])){
+      const box=computeObjectScreenBBox(obj,frame,cam,root);
+      if(!box) continue;
+      const ov=frame.overrides?.[obj.id]||{};
+      const tr={...(obj.transform||{}),...(ov.transform||{})};
+      const center=new THREE.Vector3(...(tr.pos||[0,0,0])).applyMatrix4(root.matrixWorld);
+      const depth=center.distanceTo(cameraPos);
+      if(box.rawU1<=0||box.rawU0>=1||box.rawV1<=0||box.rawV0>=1) continue;
+      projected.push({id:obj.id,u0:Math.max(0,box.rawU0),u1:Math.min(1,box.rawU1),
+        v0:Math.max(0,box.rawV0),v1:Math.min(1,box.rawV1),depth});
+    }
+    return rasterizeIDDepthMap(projected,W,H);
+  }
+
   function evaluate(frame, profileName){
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
@@ -2909,6 +2949,9 @@ const Evaluator = (() => {
     const saliency = buildSaliencySketch(frame, lens, cam, 64);
     const focus = s_focus(saliency, mainBBox);
     const clarity = s_clarity(saliency);
+
+    // ID-карта и карта глубины используются как аналитические карты сцены.
+    const idDepthMaps = buildIDDepthMaps(frame, cam, 64);
 
     // 9.5 Края
     const edges = s_edges(frame, lens, cam);
@@ -2990,11 +3033,12 @@ const Evaluator = (() => {
       total,
       criteria,
       evalOverlay,
+      maps: idDepthMaps,
       timestamp: Date.now()
     };
   }
 
-  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint } };
+  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint, rasterizeIDDepthMap } };
 })();
 
 /* ============================================================
@@ -5804,6 +5848,17 @@ function runTests(){
   }
   function ok(name, value){
     results.push({ name, got: value ? 1 : 0, want: 1, tol: 0, ok: !!value });
+  }
+
+  // ID/depth map: empty background is zero; nearest object wins overlap.
+  {
+    const maps = Evaluator._test.rasterizeIDDepthMap([
+      {id:'far',u0:0.1,u1:0.8,v0:0.1,v1:0.8,depth:5},
+      {id:'near',u0:0.3,u1:0.6,v0:0.3,v1:0.6,depth:2}
+    ], 10, 10);
+    ok('ID/depth map: object IDs assigned', maps.ids.some(v=>v===1) && maps.ids.some(v=>v===2));
+    ok('ID/depth map: nearest object wins overlap', maps.ids[4*10+4]===2 && maps.depth[4*10+4]===2);
+    ok('ID/depth map: background depth is zero', maps.ids[0]===0 && maps.depth[0]===0);
   }
 
   // FOV FF 3:2
