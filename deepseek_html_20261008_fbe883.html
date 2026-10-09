@@ -3103,8 +3103,11 @@ const ImproveEngine = (() => {
   }
 
   function score(frame,profile){
-    const r=EvaluatorV2.evaluate(frame,profile);
-    return {total:Number.isFinite(r?.total)?r.total:0,result:r};
+    const raw=EvaluatorV2.evaluate(frame,profile);
+    // Защита от NaN/Infinity: они ломают сортировку кандидатов и отображаются в UI как «NaN%».
+    const total=Number.isFinite(raw?.total)?raw.total:0;
+    const result=raw && typeof raw==='object'?{...raw,total}:{total,criteria:[]};
+    return {total,result};
   }
 
   function improve(frame,profile){
@@ -3115,11 +3118,11 @@ const ImproveEngine = (() => {
     const ranked=[];
     for(const c of pool){
       const scored=score(c.frame,profile);
-      const entry={...c,result:scored.result,deltaScore:scored.total-base.total};
+      const entry={...c,result:scored.result,total:scored.total,deltaScore:scored.total-base.total};
       ranked.push(entry);
-      if(!best || entry.result.total>best.result.total) best=entry;
+      if(!best || entry.total>best.total) best=entry;
     }
-    ranked.sort((a,b)=>b.result.total-a.result.total);
+    ranked.sort((a,b)=>b.total-a.total);
     const changed=!!best && best.result.total>base.total+0.002;
     const weak=base.result?.criteria?.filter(c=>Number.isFinite(c.s)).sort((a,b)=>a.s-b.s)[0]||null;
     return {
@@ -3127,7 +3130,7 @@ const ImproveEngine = (() => {
       best:changed?best:null,
       checked:pool.length,
       weakCriterion:weak?{name:weak.name||weak.label||'Критерий',score:weak.s,act:weak.act||''}:null,
-      alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.result.total,deltaScore:c.deltaScore,candidate:c})),
+      alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.total,deltaScore:c.deltaScore,candidate:c})),
       sourceFrameId:frame.id,
       _test:{
         originalUnchanged:JSON.stringify(frame)===JSON.stringify(beforeFrame),
