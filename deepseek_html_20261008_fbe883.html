@@ -4032,7 +4032,7 @@ const UI = (() => {
   function exportBoardPNG(){
     const frames = State.get().frames;
     if(!frames.length){ toast('Нет кадров для экспорта'); return; }
-    const W = 480, spacing = 30, captionH = 60;
+    const W = 480, spacing = 30, captionH = 104;
     const cols = Math.min(3, frames.length);
     const rows = Math.ceil(frames.length / cols);
     const frameHeights = frames.map(f => Math.max(1, Math.round(W * Number(f.aspect[1]) / Number(f.aspect[0]))));
@@ -4058,8 +4058,7 @@ const UI = (() => {
       frames.forEach((f, i) => {
         const col = i % cols, row = Math.floor(i / cols);
         const x = spacing + col * (W + spacing);
-        const y = rowY[row];
-        const H = frameHeights[i];
+        const y = rowY[row], H = frameHeights[i];
         const lens = FrameAdapter.lensOf(f);
         const shot = FrameAdapter.frameToShot(f);
         const cam = CameraRig.apply(shot, lens);
@@ -4067,8 +4066,25 @@ const UI = (() => {
         r.setClearColor(0x000000, 1);
         r.render(rootGroup, cam);
         octx.drawImage(r.domElement, 0, 0, r.domElement.width, r.domElement.height, x, y, W, H);
-        octx.fillStyle = '#e6e6e6'; octx.font = '20px sans-serif';
-        octx.fillText(`${i+1}. ${f.name || 'Кадр'}`, x, y + H + 30);
+        octx.fillStyle = '#e6e6e6'; octx.font = 'bold 18px sans-serif';
+        octx.fillText(`${i+1}. ${f.name || 'Кадр'}`.slice(0, 52), x, y + H + 24);
+        octx.fillStyle = '#aeb7c4'; octx.font = '13px sans-serif';
+        const meta = `${f.lens?.focalMm ?? '—'} мм · ${f.aspect[0]}:${f.aspect[1]} · ${Number(f.durationSec)||0} с`;
+        octx.fillText(meta, x, y + H + 45);
+        if(f.notes){
+          octx.fillStyle = '#c8cdd5'; octx.font = '12px sans-serif';
+          const maxWidth = W, words = String(f.notes).split(/\s+/);
+          let line = '', lineNo = 0;
+          for(const word of words){
+            const candidate = line ? line + ' ' + word : word;
+            if(octx.measureText(candidate).width > maxWidth && line){
+              octx.fillText(line, x, y + H + 65 + lineNo * 15);
+              line = word; lineNo++;
+              if(lineNo >= 2) break;
+            }else line = candidate;
+          }
+          if(line && lineNo < 2) octx.fillText(line, x, y + H + 65 + lineNo * 15);
+        }
       });
     }catch(e){
       console.error('FrameLab: storyboard export failed', e);
