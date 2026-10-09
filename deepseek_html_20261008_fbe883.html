@@ -2936,6 +2936,7 @@ const EvaluatorV2 = (() => {
     if(!main) main = objs.find(o=>o.role==='main') || objs.find(o=>o.role==='secondary');
     if(!main) return null;
     const ov = frame.overrides?.[main.id] || {};
+    if(ov.visible === false || (ov.visible === undefined && main.visible === false)) return null;
     const tr = { ...(main.transform||{}), ...(ov.transform||{}) };
     const size = AnalyzerLite.guessObjectSize(main);
     const root = SceneManager.getRenderInfo().rootGroup;
@@ -2954,16 +2955,27 @@ const EvaluatorV2 = (() => {
     return {u0,u1,v0,v1,u:(u0+u1)/2,v:(v0+v1)/2,w:u1-u0,h:v1-v0,area:Math.max(0,(u1-u0)*(v1-v0)),main};
   }
 
-  function visibleObjects(){
-    return (State.get().objects||[]).filter(o=>o.role!=='guide' && o.visible!==false);
+  function objectVisibleInFrame(obj, frame){
+    if(obj.role === 'guide') return false;
+    const ov = frame?.overrides?.[obj.id] || {};
+    return (ov.visible !== undefined ? ov.visible : obj.visible) !== false;
   }
 
-  function colorHarmony(){
-    const objs=visibleObjects();
+  function objectColorInFrame(obj, frame){
+    const ov = frame?.overrides?.[obj.id] || {};
+    return { ...(obj.color || {r:128,g:128,b:128}), ...(ov.color || {}) };
+  }
+
+  function visibleObjects(frame){
+    return (State.get().objects||[]).filter(o=>objectVisibleInFrame(o, frame));
+  }
+
+  function colorHarmony(frame){
+    const objs=visibleObjects(frame);
     if(objs.length<2) return 0.75;
     const hues=[];
     for(const o of objs){
-      const c=o.color||{r:128,g:128,b:128};
+      const c=objectColorInFrame(o, frame);
       const mx=Math.max(c.r,c.g,c.b), mn=Math.min(c.r,c.g,c.b), d=mx-mn;
       if(d<8) continue;
       let h=0;
@@ -2996,10 +3008,10 @@ const EvaluatorV2 = (() => {
     const headroom=gauss(Math.abs(safeB.v0-0.16),0.12);
     const shotScale=gauss(Math.log(Math.max(0.004,safeB.area)/0.18),0.8);
     const negative=gauss(Math.log(Math.max(0.004,1-safeB.area)/0.82),0.7);
-    const simplicity=clamp(1-Math.max(0,visibleObjects().length-3)*0.14);
+    const frameObjects=visibleObjects(frame);\n    const simplicity=clamp(1-Math.max(0,frameObjects.length-3)*0.14);
     const symmetry=gauss(Math.abs(cx-0.5),0.18);
     const tilt=gauss(Math.abs(frame.camera?.roll||0),5);
-    const color=colorHarmony();
+    const color=colorHarmony(frame);
 
     const extra=[
       {id:'golden',name:'Золотое сечение',s:golden,why:'Главный объект сравнен с золотыми точками.',act:golden<0.55?'Сместить главный объект ближе к золотой зоне.':null},
@@ -3007,7 +3019,7 @@ const EvaluatorV2 = (() => {
       {id:'lead',name:'Lead room',s:leadRoom,why:'Свободное пространство по направлению кадра: '+(leadSide*100).toFixed(0)+'%.',act:leadRoom<0.55?'Оставить больше пространства перед объектом.':null},
       {id:'headroom',name:'Headroom',s:headroom,why:'Верхняя граница главного объекта: '+(safeB.v0*100).toFixed(0)+'% кадра.',act:headroom<0.55?'Дать объекту больше воздуха сверху.':null},
       {id:'color',name:'Цветовая гармония',s:color,why:'Сравнение цветовых оттенков видимых объектов.',act:color<0.55?'Снизить конфликтующие оттенки.':null},
-      {id:'simplicity',name:'Простота',s:simplicity,why:'В кадре '+visibleObjects().length+' видимых объектов.',act:simplicity<0.7?'Убрать второстепенные объекты или упростить кадр.':null},
+      {id:'simplicity',name:'Простота',s:simplicity,why:'В кадре '+frameObjects.length+' видимых объектов.',act:simplicity<0.7?'Убрать второстепенные объекты или упростить кадр.':null},
       {id:'negative',name:'Негативное пространство',s:negative,why:'Свободная площадь вокруг главного объекта: '+((1-safeB.area)*100).toFixed(0)+'%.',act:negative<0.55?'Увеличить чистое пространство вокруг объекта.':null},
       {id:'shotScale',name:'Масштаб плана',s:shotScale,why:'Площадь главного объекта ≈ '+(safeB.area*100).toFixed(1)+'% кадра.',act:shotScale<0.55?'Изменить дистанцию или фокусное расстояние.':null},
       {id:'symmetry',name:'Симметрия',s:symmetry,why:'Отклонение центра объекта от оси: '+Math.abs(cx-0.5).toFixed(2)+'.',act:symmetry<0.55?'Для симметричного варианта выровнять объект по центру.':null},
@@ -3037,7 +3049,7 @@ const EvaluatorV2 = (() => {
     return {profile:profileName,total,criteria:all,base,mainBBox:safeB,timestamp:Date.now()};
   }
 
-  return {evaluate, profiles:['classic','dynamic','symmetry','minimalism','portrait','landscape','vertical','cinematic','free']};
+  return {evaluate, _test:{objectVisibleInFrame,objectColorInFrame,colorHarmony}, profiles:['classic','dynamic','symmetry','minimalism','portrait','landscape','vertical','cinematic','free']};
 })();
 
 /* ============================================================
@@ -5648,6 +5660,20 @@ function runTests(){
     );
     ok('S_focus: внимание на главном объекте выше', focusInside.s > focusOutside.s);
     t('S_focus: доля внимания внутри объекта', focusInside.frac, 1, 0.001);
+  }
+
+  // Этап 6: оценка учитывает видимость и цвет именно выбранного кадра.
+  {
+    const obj = { id:'test-object', role:'main', visible:true, color:{r:255,g:0,b:0} };
+    const hiddenFrame = { overrides:{ 'test-object':{visible:false} } };
+    const recoloredFrame = { overrides:{ 'test-object':{visible:true,color:{r:0,g:0,b:255}} } };
+    ok('V2: скрытый в кадре объект исключён', !EvaluatorV2._test.objectVisibleInFrame(obj, hiddenFrame));
+    ok('V2: глобально скрытый объект не показывается', !EvaluatorV2._test.objectVisibleInFrame({...obj,visible:false}, {overrides:{}}));
+    ok('V2: guide исключается из композиции', !EvaluatorV2._test.objectVisibleInFrame({...obj,role:'guide'}, {overrides:{}}));
+    const c = EvaluatorV2._test.objectColorInFrame(obj, recoloredFrame);
+    ok('V2: цвет кадра перекрывает общий цвет', c.r===0 && c.g===0 && c.b===255);
+    const c2 = EvaluatorV2._test.objectColorInFrame(obj, {overrides:{}});
+    ok('V2: общий цвет используется без override', c2.r===255 && c2.g===0 && c2.b===0);
   }
 
   // Горизонт
