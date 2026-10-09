@@ -120,6 +120,10 @@
   body.hideAll #rulerTop,body.hideAll #rulerLeft,body.hideAll #rulerCorner{display:none}
   body.hideAll #app{grid-template-rows:0 0 1fr 0}
   .swatch{width:18px;height:18px;border:1px solid var(--bd);border-radius:3px;cursor:pointer}
+  .objItem.inGroup{margin-left:14px}
+  .objItem.grp{font-weight:600}
+  .objItem .arw{width:14px;text-align:center;opacity:.8;cursor:pointer}
+  #objList{user-select:none}
   .objItem{display:flex;align-items:center;gap:4px;padding:3px 4px;border-radius:3px;
     cursor:pointer;user-select:none}
   .objItem:hover{background:#3a3a3d}
@@ -263,6 +267,8 @@
     <span class="sep"></span>
     <button id="btnDelete">Удалить</button>
     <button id="btnDup">Дубль</button>
+    <button id="btnGroup" title="Ctrl+G">Группа</button>
+    <button id="btnUngroup" title="Ctrl+Shift+G">Разгруп.</button>
     <button id="btnUndo">↶</button>
     <button id="btnRedo">↷</button>
     <button id="btnFit">Fit</button>
@@ -627,7 +633,8 @@
     <!-- Объекты -->
     <div class="panelSection collapsed" data-sec="objects">
       <h3>Объекты</h3>
-      <div class="body"><div id="objList"></div></div>
+      <div class="body"><div id="objList"></div>
+        <div class="hint">Shift/Ctrl+клик — несколько объектов (в списке Shift — диапазон) · Ctrl+G группа · Ctrl+Shift+G разгруппировать · Alt+клик по сцене — один объект из группы · Ctrl+A — выделить всё</div></div>
     </div>
   </div>
 
@@ -718,6 +725,7 @@ const State = (() => {
     sceneRotation: { rx: 0, ry: 0, rz: 0 },
     grids: defaultGrids(),
     evalProfile: 'classic',
+    groups: [],                                  // [{id,name,collapsed}]; у объекта — groupId
     freeProfile: { enabled: {}, weights: {} },   // профиль «Свободный»; недостающие id добивает EvaluatorV2.normalizeFree
     evalAuto: true
   });
@@ -846,6 +854,7 @@ const State = (() => {
     if(project.viewMode === undefined) project.viewMode = 'normal';
     if(project.cvd === undefined) project.cvd = 'none';
     if(!project.evalProfile) project.evalProfile = 'classic';
+    if(!Array.isArray(project.groups)) project.groups = [];
     if(!project.freeProfile || typeof project.freeProfile !== 'object') project.freeProfile = { enabled:{}, weights:{} };
     if(!project.freeProfile.enabled) project.freeProfile.enabled = {};
     if(!project.freeProfile.weights) project.freeProfile.weights = {};
@@ -932,6 +941,40 @@ const State = (() => {
     if(frame && frame.id === project.currentFrameId) return snapshotObjects(project);
     return JSON.parse(JSON.stringify((frame && frame.overrides) || snapshotObjects(project)));
   }
+  // <group-core>  (чистые функции над проектом — проверяются отдельно)
+  // Группа из <2 объектов не нужна: распускаем; groupId на несуществующую группу сбрасываем.
+  function pruneGroups(p){
+    if(!Array.isArray(p.groups)) p.groups = [];
+    const count = {};
+    for(const o of p.objects) if(o.groupId) count[o.groupId] = (count[o.groupId] || 0) + 1;
+    p.groups = p.groups.filter(g => g && (count[g.id] || 0) >= 2);
+    const alive = new Set(p.groups.map(g => g.id));
+    for(const o of p.objects) if(o.groupId && !alive.has(o.groupId)) o.groupId = null;
+  }
+  // Группирует объекты ids; вложенных групп нет: объект, уже лежавший в другой группе, переходит в новую.
+  function groupObjects(p, ids){
+    const set = new Set(ids);
+    const members = p.objects.filter(o => set.has(o.id));
+    if(members.length < 2) return null;
+    if(!Array.isArray(p.groups)) p.groups = [];
+    let k = 1; while(p.groups.some(g => g.name === 'Группа ' + k)) k++;
+    const gid = uid();
+    p.groups.push({ id:gid, name:'Группа ' + k, collapsed:false });
+    for(const m of members) m.groupId = gid;
+    pruneGroups(p);
+    return gid;
+  }
+  // Распускает все группы, в которые входят объекты ids. Возвращает число распущенных групп.
+  function ungroupObjects(p, ids){
+    const set = new Set(ids);
+    const gids = new Set(p.objects.filter(o => set.has(o.id) && o.groupId).map(o => o.groupId));
+    if(!gids.size) return 0;
+    for(const o of p.objects) if(gids.has(o.groupId)) o.groupId = null;
+    pruneGroups(p);
+    return gids.size;
+  }
+  // </group-core>
+
   function get(){ return project; }
   function currentFrame(){
     const p = get();
@@ -973,7 +1016,8 @@ const State = (() => {
 
   return { on, emit, load, save, get, currentFrame, defaultGrids,
            defaultFrame, defaultShotCam, uid, History,
-           snapshotObjects, adoptFrameState, switchFrame, objectStateOf };
+           snapshotObjects, adoptFrameState, switchFrame, objectStateOf,
+           pruneGroups, groupObjects, ungroupObjects };
 })();
 
 /* ============================================================
@@ -1095,7 +1139,10 @@ const SceneManager = (() => {
   let rootGroup;
   const objectMap = new Map();
   const objectData = new Map();
-  let selectedId = null;
+  let selectedId = null;      // id, если выбран ровно один объект; иначе null
+  let selIds = [];            // все выбранные объекты (порядок = порядок выбора)
+  let multiPivot = null;      // невидимая «ручка» группового гизмо (в rootGroup)
+  let multiDrag = null;       // состояние текущего перетаскивания группы
   let gizmoMode = 'translate';
   let axisLock = 'none';
   const raycaster = new THREE.Raycaster();
@@ -1171,13 +1218,15 @@ const SceneManager = (() => {
     tcontrols.setSize(0.8);
     tcontrols.addEventListener('dragging-changed', e => {
       orbit.enabled = !e.value;
-      if(!e.value) {
-        if(camSelected) emit('shotCamEdited');
-        else commitTransform();
-      }
+      if(e.value){
+        if(isMultiGizmo()) beginMultiDrag();
+      } else if(camSelected) emit('shotCamEdited');
+      else if(multiDrag) commitMultiDrag();
+      else commitTransform();
     });
     tcontrols.addEventListener('objectChange', () => {
       if(camSelected) emit('shotCamEditedLive');
+      else if(multiDrag) applyMultiDrag();
       else emit('transformChanged', getSelectedData());
     });
     scene.add(tcontrols);
@@ -1319,10 +1368,15 @@ const SceneManager = (() => {
       return;
     }
     const hits = raycaster.intersectObjects(Array.from(objectMap.values()), true);
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey;   // Shift/Ctrl — добавить/убрать из выделения
     if(hits.length > 0){
       const obj = findObjByObject3D(hits[0].object);
-      if(obj) select(obj.id);
-    } else {
+      if(obj){
+        // Клик по члену группы выделяет всю группу; Alt — только этот объект.
+        const ids = e.altKey ? [obj.id] : membersOf(obj.id);
+        if(additive) toggleSelect(ids); else setSelection(ids);
+      }
+    } else if(!additive){
       deselectAll();
     }
   }
@@ -1335,34 +1389,116 @@ const SceneManager = (() => {
     return null;
   }
 
-  function select(id){
-    camSelected = false;
-    if(selectedId === id) return;
-    selectedId = id;
-    if(id){
+  // <multi-core>
+  // Групповое перетаскивание: каждому объекту применяем дельту ручки (pivotNow · pivotStart⁻¹ · M0).
+  function multiDeltaMatrices(pivotStart, pivotNow, startMatrices){
+    const delta = pivotNow.clone().multiply(pivotStart.clone().invert());
+    return startMatrices.map(m0 => delta.clone().multiply(m0));
+  }
+  // </multi-core>
+
+  function membersOf(id){
+    const d = objectData.get(id);
+    if(!d || !d.groupId) return [id];
+    const ids = State.get().objects.filter(o => o.groupId === d.groupId).map(o => o.id);
+    return ids.length ? ids : [id];
+  }
+  function movableIds(){ return selIds.filter(id => objectMap.has(id) && !objectData.get(id)?.locked); }
+  function isMultiGizmo(){ return !camSelected && selIds.length > 1 && !!multiPivot && tcontrols.object === multiPivot; }
+  function placePivot(ids){
+    if(!multiPivot){ multiPivot = new THREE.Group(); rootGroup.add(multiPivot); }
+    const c = new THREE.Vector3();
+    for(const id of ids) c.add(objectMap.get(id).position);
+    c.divideScalar(ids.length);
+    multiPivot.position.copy(c);
+    multiPivot.quaternion.identity();
+    multiPivot.scale.set(1,1,1);
+    multiPivot.updateMatrix();
+  }
+  function beginMultiDrag(){
+    const ids = movableIds();
+    multiPivot.updateMatrix();
+    multiDrag = {
+      ids,
+      pivotStart: multiPivot.matrix.clone(),
+      start: ids.map(id => { const g = objectMap.get(id); g.updateMatrix(); return g.matrix.clone(); })
+    };
+  }
+  function applyMultiDrag(){
+    multiPivot.updateMatrix();
+    const mats = multiDeltaMatrices(multiDrag.pivotStart, multiPivot.matrix, multiDrag.start);
+    multiDrag.ids.forEach((id, i) => {
       const g = objectMap.get(id);
-      const d = objectData.get(id);
+      mats[i].decompose(g.position, g.quaternion, g.scale);
+    });
+  }
+  function commitMultiDrag(){
+    const md = multiDrag; multiDrag = null;
+    if(!md) return;
+    State.History.tx(() => {
+      for(const id of md.ids){
+        const g = objectMap.get(id), d = objectData.get(id);
+        if(!g || !d) continue;
+        const e = new THREE.Euler().setFromQuaternion(g.quaternion, 'XYZ');
+        d.transform.pos = [g.position.x, g.position.y, g.position.z];
+        d.transform.rotEuler = [Utils.deg(e.x), Utils.deg(e.y), Utils.deg(e.z)];
+        d.transform.scale = [g.scale.x, g.scale.y, g.scale.z];
+      }
+    });
+    State.save();
+    placePivot(md.ids);          // ручка снова в центре выделения, без поворота
+    emit('transformChanged', null);
+  }
+  // Привязывает гизмо к текущему выделению (один объект / ручка группы / ничего).
+  function refreshGizmo(){
+    multiDrag = null;
+    if(!tcontrols || camSelected) return;
+    if(selIds.length === 1){
+      const g = objectMap.get(selIds[0]), d = objectData.get(selIds[0]);
       if(g && !d?.locked){ tcontrols.attach(g); tcontrols.enabled = true; }
       else tcontrols.detach();
+    } else if(selIds.length > 1){
+      const ids = movableIds();      // заблокированные остаются на месте
+      if(ids.length){ placePivot(ids); tcontrols.attach(multiPivot); tcontrols.enabled = true; }
+      else tcontrols.detach();
     } else tcontrols.detach();
+  }
+  function setSelection(ids){
+    const wasCam = camSelected;
+    camSelected = false;
+    const next = [...new Set(ids)].filter(id => objectData.has(id));
+    const same = next.length === selIds.length && next.every((id, i) => id === selIds[i]);
+    if(same && !wasCam) return;
+    selIds = next;
+    selectedId = next.length === 1 ? next[0] : null;
+    refreshGizmo();
     emit('selectionChanged', getSelectedData());
+    emit('selectionSetChanged', selIds.slice());
+  }
+  function select(id){ setSelection(id ? [id] : []); }
+  function toggleSelect(ids){
+    const all = ids.every(id => selIds.includes(id));
+    setSelection(all ? selIds.filter(id => !ids.includes(id)) : [...selIds, ...ids]);
   }
   function selectCamera(){
     camSelected = true;
-    selectedId = null;
+    selIds = []; selectedId = null; multiDrag = null;
     tcontrols.attach(camGroup);
     emit('camSelected');
     emit('selectionChanged', null);
+    emit('selectionSetChanged', []);
   }
   function deselectAll(){
     camSelected = false;
     tcontrols.detach();
-    select(null);
+    if(selIds.length) setSelection([]);
+    else emit('selectionSetChanged', []);
   }
   function isCamSelected(){ return camSelected; }
 
   function getSelectedData(){ return selectedId ? objectData.get(selectedId) : null; }
   function getSelectedId(){ return selectedId; }
+  function getSelectedIds(){ return selIds.slice(); }
   function getCamGroup(){ return camGroup; }
   function getCamPicker(){ return camPicker; }
 
@@ -1499,6 +1635,12 @@ const SceneManager = (() => {
     // Пирамида живёт вне rootGroup и не должна исчезать при смене/проигрывании кадров.
     if(frame) updateShotCamViz(FrameAdapter.frameToShot(frame), FrameAdapter.lensOf(frame));
     if(camGroup) camGroup.visible = true;
+    // Выбор не должен ссылаться на удалённые объекты; гизмо цеплялось к старым (уже снятым) группам.
+    const kept = selIds.filter(id => objectData.has(id));
+    const pruned = kept.length !== selIds.length;
+    selIds = kept; selectedId = kept.length === 1 ? kept[0] : null;
+    refreshGizmo();
+    if(pruned){ emit('selectionChanged', getSelectedData()); emit('selectionSetChanged', selIds.slice()); }
     emit('rebuilt');
   }
   // Показать объекты в состоянии указанного кадра (для миниатюр и экспорта).
@@ -1519,7 +1661,7 @@ const SceneManager = (() => {
     rootGroup.add(g); objectMap.set(id, g);
     applyTransform(data, frame);
     applyColor(data, frame);
-    if(selectedId === id) tcontrols.attach(g);
+    if(selIds.includes(id)) refreshGizmo();
     if(frame) updateShotCamViz(FrameAdapter.frameToShot(frame), FrameAdapter.lensOf(frame));
     if(camGroup) camGroup.visible = true;
     emit('rebuiltOne', id);
@@ -1546,31 +1688,64 @@ const SceneManager = (() => {
     select(data.id); State.save();
     return data;
   }
-  function deleteObject(id){
+  function deleteObjects(ids){
     const project = State.get();
-    const idx = project.objects.findIndex(o => o.id === id);
-    if(idx < 0) return;
+    const set = new Set(ids);
+    if(!project.objects.some(o => set.has(o.id))) return;
     State.History.tx(() => {
-      project.objects.splice(idx, 1);
-      project.frames.forEach(fr => { if(fr.overrides[id]) delete fr.overrides[id]; });
+      for(let i = project.objects.length - 1; i >= 0; i--) if(set.has(project.objects[i].id)) project.objects.splice(i, 1);
+      project.frames.forEach(fr => { for(const id of set) if(fr.overrides && fr.overrides[id]) delete fr.overrides[id]; });
+      State.pruneGroups(project);
     });
-    if(selectedId === id) select(null);
-    rebuild(State.currentFrame()); State.save();
+    rebuild(State.currentFrame()); State.save();   // rebuild заодно убирает удалённые id из выбора
   }
+  function deleteObject(id){ deleteObjects([id]); }
   function duplicateSelected(){
     const project = State.get();
-    if(!selectedId) return;
-    const src = project.objects.find(o => o.id === selectedId);
-    if(!src) return;
-    const copy = JSON.parse(JSON.stringify(src));
-    copy.id = Utils.uid();
-    copy.name = src.name + ' копия';
-    copy.transform.pos[0] += 0.2;
-    State.History.tx(() => { project.objects.push(copy); });
+    const ids = selIds.slice();
+    const srcs = project.objects.filter(o => ids.includes(o.id));
+    if(!srcs.length) return;
+    if(!Array.isArray(project.groups)) project.groups = [];
+    const copies = [], gmap = new Map();
+    State.History.tx(() => {
+      // Группа, выбранная целиком, дублируется как новая группа; частично выбранная — копии без группы.
+      for(const gid of new Set(srcs.map(o => o.groupId).filter(Boolean))){
+        if(project.objects.filter(o => o.groupId === gid).every(m => ids.includes(m.id))){
+          const g = project.groups.find(x => x.id === gid);
+          const ng = { id:Utils.uid(), name:(g ? g.name : 'Группа') + ' копия', collapsed:false };
+          project.groups.push(ng); gmap.set(gid, ng.id);
+        }
+      }
+      for(const src of srcs){
+        const copy = JSON.parse(JSON.stringify(src));
+        copy.id = Utils.uid();
+        copy.name = src.name + ' копия';
+        copy.transform.pos[0] += 0.2;
+        copy.groupId = gmap.get(src.groupId) || null;
+        project.objects.push(copy); copies.push(copy);
+      }
+    });
     rebuild(State.currentFrame());
-    select(copy.id); State.save();
+    setSelection(copies.map(c => c.id)); State.save();
+    emit('groupsChanged');
   }
-  function updateTransformFromData(data){ applyTransform(data, State.currentFrame()); emit('transformChanged', data); }
+  function groupSelected(){
+    let gid = null;
+    State.History.tx(() => { gid = State.groupObjects(State.get(), selIds); });
+    if(!gid) return false;
+    State.save(); emit('groupsChanged'); return true;
+  }
+  function ungroupSelected(){
+    let n = 0;
+    State.History.tx(() => { n = State.ungroupObjects(State.get(), selIds); });
+    if(!n) return 0;
+    State.save(); emit('groupsChanged'); return n;
+  }
+  function updateTransformFromData(data){
+    applyTransform(data, State.currentFrame());
+    if(isMultiGizmo() && selIds.includes(data.id)) placePivot(movableIds());   // ручка группы устарела
+    emit('transformChanged', data);
+  }
   function updateColorFromData(data){ applyColor(data, State.currentFrame()); }
   function updateParamsFromData(data){ rebuildOne(data.id, State.currentFrame()); }
 
@@ -1700,7 +1875,9 @@ const SceneManager = (() => {
 
   return {
     init, on,
-    addObject, deleteObject, duplicateSelected, select, selectCamera, deselectAll, isCamSelected,
+    addObject, deleteObject, deleteObjects, duplicateSelected, select, selectCamera, deselectAll, isCamSelected,
+    selectMany: setSelection, toggleSelect, getSelectedIds, refreshSelection: refreshGizmo, membersOf,
+    groupSelected, ungroupSelected, multiDeltaMatrices,
     getSelectedData, getSelectedId, getCamGroup, getCamPicker,
     setGizmoMode, getGizmoMode, setAxis, getAxis,
     commitTransform, updateTransformFromData, updateColorFromData,
@@ -3530,8 +3707,10 @@ const UI = (() => {
     document.querySelectorAll('[data-add]').forEach(b =>
       b.addEventListener('click', () => { SceneManager.addObject(b.dataset.add); scheduleEval(); }));
     document.getElementById('btnDelete').addEventListener('click', () => {
-      const id = SceneManager.getSelectedId(); if(id){ SceneManager.deleteObject(id); scheduleEval(); }
+      const ids = SceneManager.getSelectedIds(); if(ids.length){ SceneManager.deleteObjects(ids); scheduleEval(); }
     });
+    document.getElementById('btnGroup').addEventListener('click', () => doGroup());
+    document.getElementById('btnUngroup').addEventListener('click', () => doUngroup());
     document.getElementById('btnDup').addEventListener('click', () => { SceneManager.duplicateSelected(); scheduleEval(); });
     document.getElementById('btnUndo').addEventListener('click', () => doUndo());
     document.getElementById('btnRedo').addEventListener('click', () => doRedo());
@@ -3605,7 +3784,7 @@ const UI = (() => {
     el.pLocked.addEventListener('change', () => {
       const d = SceneManager.getSelectedData(); if(!d) return;
       State.History.tx(() => { d.locked = el.pLocked.checked; });
-      SceneManager.select(d.id); State.save();
+      SceneManager.refreshSelection(); State.save();
     });
     el.pAnchor.addEventListener('change', () => {
       const d = SceneManager.getSelectedData(); if(!d) return;
@@ -3870,6 +4049,16 @@ const UI = (() => {
     State.on('reloaded', () => { onProjectReload(); toast('Восстановлено из истории'); });
 
     SceneManager.on('selectionChanged', renderProps);
+    SceneManager.on('selectionSetChanged', ids => {
+      renderObjectList();
+      const locked = ids.filter(id => State.get().objects.find(o => o.id === id)?.locked).length;
+      el.propsEmpty.textContent = ids.length > 1
+        ? 'Выбрано объектов: ' + ids.length + '. Гизмо двигает, вращает и масштабирует их вместе' +
+          (locked ? ' (заблокированных: ' + locked + ' — они остаются на месте)' : '') +
+          '. Ctrl+G — сгруппировать.'
+        : 'Ничего не выделено.';
+    });
+    SceneManager.on('groupsChanged', () => renderObjectList());
     SceneManager.on('transformChanged', d => {
       if(d && d.id === SceneManager.getSelectedId()) renderPropsValues(d);
     });
@@ -4444,6 +4633,8 @@ const UI = (() => {
             target.units = target.units || 'm';
             target.settings = { profile:'classic', language:'ru', theme:'dark', ...(target.settings || {}) };
             target.guides = Array.isArray(target.guides) ? target.guides : [];
+            target.groups = Array.isArray(target.groups) ? target.groups : [];
+            State.pruneGroups(target);
             target.sceneRotation = { rx:0, ry:0, rz:0, ...(target.sceneRotation || {}) };
             const defaultGrids = State.defaultGrids();
             target.grids = Object.fromEntries(Object.keys(defaultGrids).map(key => [
@@ -5393,14 +5584,100 @@ const UI = (() => {
     el.colSwatch.style.background = el.colHex.value;
     suppress = false;
   }
+  /* ---------- Группы и список объектов ---------- */
+  let listAnchorId = null;     // от какой строки считать диапазон Shift-клика
+  function doGroup(){
+    if(SceneManager.getSelectedIds().length < 2){ toast('Выделите минимум 2 объекта (Shift+клик)'); return; }
+    if(SceneManager.groupSelected()) toast('Сгруппировано');
+  }
+  function doUngroup(){
+    const n = SceneManager.ungroupSelected();
+    toast(n ? 'Разгруппировано: ' + n : 'В выделении нет групп');
+  }
+
   function renderObjectList(){
     const project = State.get();
+    const groups = Array.isArray(project.groups) ? project.groups : [];
     el.objCount.textContent = project.objects.length;
     el.objList.innerHTML = '';
+    const selSet = new Set(SceneManager.getSelectedIds());
     const selId = SceneManager.getSelectedId();
-    project.objects.forEach(o => {
+
+    // Порядок строк: объект без группы — как есть; группа — заголовок + члены на месте первого члена.
+    const gById = new Map(groups.map(g => [g.id, g]));
+    const rows = [], seenGroups = new Set();
+    for(const o of project.objects){
+      const g = o.groupId ? gById.get(o.groupId) : null;
+      if(!g){ rows.push({ kind:'obj', o, indent:false }); continue; }
+      if(seenGroups.has(g.id)) continue;
+      seenGroups.add(g.id);
+      const members = project.objects.filter(m => m.groupId === g.id);
+      rows.push({ kind:'grp', g, members });
+      if(!g.collapsed) for(const m of members) rows.push({ kind:'obj', o:m, indent:true });
+    }
+    const order = rows.filter(r => r.kind === 'obj').map(r => r.o.id);
+
+    const clickSelect = (e, ids, anchorId) => {
+      if(e.shiftKey && listAnchorId && order.includes(listAnchorId) && order.includes(anchorId)){
+        const i = order.indexOf(listAnchorId), j = order.indexOf(anchorId);
+        SceneManager.selectMany(order.slice(Math.min(i,j), Math.max(i,j) + 1));
+      } else if(e.ctrlKey || e.metaKey){
+        SceneManager.toggleSelect(ids); listAnchorId = anchorId;
+      } else {
+        SceneManager.selectMany(ids); listAnchorId = anchorId;
+      }
+    };
+
+    for(const r of rows){
+      if(r.kind === 'grp'){
+        const { g, members } = r;
+        const div = document.createElement('div');
+        div.className = 'objItem grp' + (members.every(m => selSet.has(m.id)) ? ' sel' : '');
+        const arw = document.createElement('span'); arw.className = 'arw';
+        arw.textContent = g.collapsed ? '▸' : '▾';
+        arw.addEventListener('click', e => {
+          e.stopPropagation();
+          g.collapsed = !g.collapsed;          // вид списка: без записи в историю
+          State.save(); renderObjectList();
+        });
+        const allVisible = members.every(m => m.visible !== false);
+        const eye = document.createElement('span'); eye.className = 'ic';
+        eye.textContent = allVisible ? '👁' : '🚫';
+        eye.addEventListener('click', e => {
+          e.stopPropagation();
+          State.History.tx(() => { for(const m of members) m.visible = !allVisible; });
+          members.forEach(m => SceneManager.updateTransformFromData(m));
+          State.save(); renderObjectList(); scheduleEval();
+        });
+        const allLocked = members.every(m => m.locked);
+        const lock = document.createElement('span'); lock.className = 'ic';
+        lock.textContent = allLocked ? '🔒' : '🔓';
+        lock.addEventListener('click', e => {
+          e.stopPropagation();
+          State.History.tx(() => { for(const m of members) m.locked = !allLocked; });
+          SceneManager.refreshSelection(); State.save(); renderObjectList();
+        });
+        const nm = document.createElement('span'); nm.className = 'nm';
+        nm.textContent = '📁 ' + g.name + ' · ' + members.length;
+        const del = document.createElement('span'); del.className = 'ic'; del.textContent = '✕';
+        del.title = 'Удалить группу вместе с объектами';
+        del.addEventListener('click', e => { e.stopPropagation(); SceneManager.deleteObjects(members.map(m => m.id)); scheduleEval(); });
+        div.append(arw, eye, lock, nm, del);
+        div.addEventListener('click', e => clickSelect(e, members.map(m => m.id), members[0].id));
+        div.addEventListener('dblclick', () => {
+          const name = prompt('Имя группы', g.name);
+          if(name !== null && name.trim()){
+            State.History.tx(() => { g.name = name.trim(); });
+            State.save(); renderObjectList();
+          }
+        });
+        el.objList.appendChild(div);
+        continue;
+      }
+
+      const o = r.o;
       const div = document.createElement('div');
-      div.className = 'objItem' + (o.id===selId?' sel':'');
+      div.className = 'objItem' + (selSet.has(o.id) ? ' sel' : '') + (r.indent ? ' inGroup' : '');
       const eye = document.createElement('span'); eye.className='ic';
       eye.textContent = o.visible === false ? '🚫' : '👁';
       eye.addEventListener('click', e => {
@@ -5413,7 +5690,7 @@ const UI = (() => {
       lock.addEventListener('click', e => {
         e.stopPropagation();
         State.History.tx(() => { o.locked = !o.locked; });
-        if(o.id === selId) SceneManager.select(o.id);
+        SceneManager.refreshSelection();
         State.save(); renderObjectList();
       });
       const anchor = document.createElement('span'); anchor.className='ic';
@@ -5428,7 +5705,8 @@ const UI = (() => {
       const del = document.createElement('span'); del.className='ic'; del.textContent='✕';
       del.addEventListener('click', e => { e.stopPropagation(); SceneManager.deleteObject(o.id); scheduleEval(); });
       div.append(eye, lock, anchor, nm, del);
-      div.addEventListener('click', () => SceneManager.select(o.id));
+      // Клик по строке выделяет только этот объект (даже внутри группы); Ctrl — добавить, Shift — диапазон.
+      div.addEventListener('click', e => clickSelect(e, [o.id], o.id));
       div.addEventListener('dblclick', () => {
         const name = prompt('Имя объекта', o.name);
         if(name !== null){
@@ -5438,7 +5716,7 @@ const UI = (() => {
         }
       });
       el.objList.appendChild(div);
-    });
+    }
   }
 
   /* ---------- Оценка ---------- */
@@ -5554,11 +5832,17 @@ const UI = (() => {
     const key = e.key;
     if(ctrl && key.toLowerCase() === 'z' && !e.shiftKey){ e.preventDefault(); doUndo(); return; }
     if((ctrl && key.toLowerCase() === 'y') || (ctrl && e.shiftKey && key.toLowerCase() === 'z')){ e.preventDefault(); doRedo(); return; }
+    if(ctrl && key.toLowerCase() === 'g'){ e.preventDefault(); if(e.shiftKey) doUngroup(); else doGroup(); return; }
+    if(ctrl && !e.shiftKey && key.toLowerCase() === 'a'){
+      e.preventDefault();
+      SceneManager.selectMany(State.get().objects.map(o => o.id));
+      return;
+    }
     if(ctrl && key.toLowerCase() === 'd'){ e.preventDefault(); SceneManager.duplicateSelected(); scheduleEval(); return; }
     if(ctrl && e.altKey && key.toLowerCase() === 'd'){ e.preventDefault(); dupCurrentFrame(); return; }
     if(key === 'Delete' || key === 'Backspace'){
-      const id = SceneManager.getSelectedId();
-      if(id){ e.preventDefault(); SceneManager.deleteObject(id); scheduleEval(); return; }
+      const ids = SceneManager.getSelectedIds();
+      if(ids.length){ e.preventDefault(); SceneManager.deleteObjects(ids); scheduleEval(); return; }
     }
     if(key === 'Tab'){
       e.preventDefault();
@@ -6114,6 +6398,55 @@ function runTests(){
     ok('V2: цвет кадра перекрывает общий цвет', c.r===0 && c.g===0 && c.b===255);
     const c2 = EvaluatorV2._test.objectColorInFrame(obj, {overrides:{}});
     ok('V2: общий цвет используется без override', c2.r===255 && c2.g===0 && c2.b===0);
+  }
+
+  // Группы объектов (чистая логика над проектом).
+  {
+    const mk = n => Array.from({length:n}, (_,i) => ({ id:'o'+i, groupId:null }));
+    let P = { objects:mk(5), groups:[] };
+    ok('Группа: из 1 объекта не создаётся', State.groupObjects(P,['o0'])===null && P.groups.length===0);
+    const g1 = State.groupObjects(P,['o0','o1','o2']);
+    ok('Группа: 3 объекта получили groupId', P.objects.slice(0,3).every(o=>o.groupId===g1) && P.groups.length===1);
+    ok('Группа: остальные не затронуты', P.objects[3].groupId===null && P.objects[4].groupId===null);
+    const g2 = State.groupObjects(P,['o1','o2']);
+    ok('Группа: у старой остался 1 объект — она распадается',
+       P.objects[1].groupId===g2 && P.objects[2].groupId===g2 && P.objects[0].groupId===null && P.groups.length===1);
+    const P2 = { objects:mk(5), groups:[] };
+    const h1 = State.groupObjects(P2,['o0','o1','o2']);
+    const h2 = State.groupObjects(P2,['o2','o3']);
+    ok('Группа: у старой остались 2 объекта — она сохраняется',
+       P2.objects[0].groupId===h1 && P2.objects[1].groupId===h1 && P2.objects[2].groupId===h2 && P2.groups.length===2);
+    ok('Группа: имена уникальны', (()=>{ const q={objects:mk(4),groups:[]}; State.groupObjects(q,['o0','o1']); State.groupObjects(q,['o2','o3']); return q.groups[0].name!==q.groups[1].name; })());
+    ok('Разгруппировка: по одному члену распускается вся группа', State.ungroupObjects(P,['o2'])===1 && P.objects.every(o=>o.groupId===null) && P.groups.length===0);
+    ok('Разгруппировка: без групп → 0', State.ungroupObjects(P,['o0'])===0);
+    const Q = { objects:mk(3), groups:[] };
+    State.groupObjects(Q,['o0','o1','o2']);
+    Q.objects.splice(2,1); State.pruneGroups(Q);
+    ok('Удаление: из группы 3 → осталось 2, группа сохраняется', Q.groups.length===1 && Q.objects.every(o=>!!o.groupId));
+    Q.objects.splice(1,1); State.pruneGroups(Q);
+    ok('Удаление: остался 1 объект — группа распадается', Q.groups.length===0 && Q.objects.every(o=>!o.groupId));
+    const R = { objects:[{id:'a',groupId:'ghost'},{id:'b',groupId:null}], groups:[] };
+    State.pruneGroups(R);
+    ok('Импорт: groupId на несуществующую группу сбрасывается', R.objects[0].groupId===null);
+  }
+  // Групповое перетаскивание: дельта ручки применяется ко всем объектам.
+  {
+    const M = THREE.Matrix4;
+    const at = (x,y,z) => new M().makeTranslation(x,y,z);
+    const pos = m => new THREE.Vector3().setFromMatrixPosition(m);
+    const pivot0 = at(1,0,0);
+    const tr = SceneManager.multiDeltaMatrices(pivot0, at(3,0,0), [at(0,0,0), at(2,0,0)]);
+    t('Мульти: сдвиг ручки на 2 двигает объект A на x=2', pos(tr[0]).x, 2, 1e-6);
+    t('Мульти: сдвиг ручки на 2 двигает объект B на x=4', pos(tr[1]).x, 4, 1e-6);
+    const rot = new M().makeRotationY(Math.PI/2).setPosition(1,0,0);   // поворот 90° вокруг Y в точке ручки
+    const rr = SceneManager.multiDeltaMatrices(pivot0, rot, [at(2,0,0)]);
+    t('Мульти: поворот вокруг центра ручки, x', pos(rr[0]).x, 1, 1e-6);
+    t('Мульти: поворот вокруг центра ручки, z', pos(rr[0]).z, -1, 1e-6);
+    const sc = new M().makeScale(2,2,2).setPosition(1,0,0);
+    const ss = SceneManager.multiDeltaMatrices(pivot0, sc, [at(2,0,0)]);
+    t('Мульти: масштаб ×2 от центра ручки', pos(ss[0]).x, 3, 1e-6);
+    const same = SceneManager.multiDeltaMatrices(pivot0, pivot0.clone(), [at(5,6,7)]);
+    ok('Мульти: нулевая дельта не меняет объект', pos(same[0]).distanceTo(new THREE.Vector3(5,6,7)) < 1e-9);
   }
 
   // Профиль «Свободный»: выбор критериев и веса.
