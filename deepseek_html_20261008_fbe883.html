@@ -2930,6 +2930,8 @@ const EvaluatorV2 = (() => {
   function mainBBox(frame){
     const lens = FrameAdapter.lensOf(frame);
     const cam = CameraRig.apply(FrameAdapter.frameToShot(frame), lens);
+    // Refresh the shared camera's world matrices for each candidate before projecting points.
+    cam.updateMatrixWorld(true);
     const id = frame.camera?.mainObjId;
     const objs = State.get().objects || [];
     let main = id ? objs.find(o=>o.id===id) : null;
@@ -2940,6 +2942,7 @@ const EvaluatorV2 = (() => {
     const tr = { ...(main.transform||{}), ...(ov.transform||{}) };
     const size = AnalyzerLite.guessObjectSize(main);
     const root = SceneManager.getRenderInfo().rootGroup;
+    root.updateMatrixWorld(true);
     const center = new THREE.Vector3(...(tr.pos||[0,0,0]));
     const corners=[];
     for(const [sx,sy,sz] of [[-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],[-1,-1,1],[1,-1,1],[-1,1,1],[1,1,1]]){
