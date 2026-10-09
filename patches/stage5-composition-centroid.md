@@ -4,8 +4,8 @@ Status: **applied to the main HTML; verified by reading the committed file back 
 Target branch: `67pocoyo`
 Target file: `deepseek_html_20261008_fbe883.html`
 Initial base blob SHA: `ed83d53303eafe06d5542781edf41d00d5a1a682`
-Latest implementation commit: `8eb99820ef6d7d202b154835fb306b562fdda2f8`
-Latest HTML blob SHA: `a37c4f6a0af9419a4e4d13969ced1cf9ff464089`
+Latest implementation commit: `0a9eb0c2c228663b2b8a3a0104a1dfea9e45b75f`
+Latest HTML blob SHA: `c8c0632b9c015e2ef36d4a35bf4b8cd687138691`
 
 ## Problem
 
@@ -112,3 +112,8 @@ The shared projected bounding-box helper now applies each object's Euler rotatio
 ## Regression coverage
 
 Added pure-function tests to the in-app test runner for: equal-weight objects centering at the midpoint, the main object receiving extra weight, and invalid/zero-area items being ignored. These tests are present in the committed file; they have not yet been executed in a live browser session.
+
+
+## Follow-up: 3D thickness and circle forms
+
+The circle primitive now has a form selector: flat circle, cylinder, or ellipsoid. Cylinder depth is aligned to the scene Z axis; ellipsoid uses sphere geometry and the existing X/Y/Z transform scale. Rectangle and polygon thickness fields are explicitly labeled as Z depth. Added in-app regression checks for the reported depth values. GitHub read-back verified the code and tests are present; live browser execution is still pending.
