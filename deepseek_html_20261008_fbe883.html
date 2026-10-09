@@ -3058,44 +3058,94 @@ const EvaluatorV2 = (() => {
    ============================================================ */
 const ImproveEngine = (() => {
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-  function cloneFrame(f){ return JSON.parse(JSON.stringify(f)); }
+  const cloneFrame=f=>JSON.parse(JSON.stringify(f));
+  const round=(v,n=2)=>Number(v.toFixed(n));
 
+  // Кандидаты — небольшие, обратимые шаги вокруг текущего кадра.
+  // Оценщик сравнивает их по тому же профилю, который выбран пользователем.
   function candidates(frame){
     const f0=cloneFrame(frame), out=[];
-    const add=(label,mutate,kind)=>{const f=cloneFrame(f0);mutate(f);out.push({label,kind,frame:f});};
-    [-0.35,0.35].forEach(v=>add('Камера X '+(v>0?'+':'')+v.toFixed(2)+' м',f=>f.camera.pos[0]+=v,'camera'));
-    [-0.20,0.20].forEach(v=>add('Камера Y '+(v>0?'+':'')+v.toFixed(2)+' м',f=>f.camera.pos[1]=clamp(f.camera.pos[1]+v,-20,20),'camera'));
-    [-4,4].forEach(v=>add('Yaw '+(v>0?'+':'')+v+'°',f=>f.camera.yaw+=v,'camera'));
-    [-3,3].forEach(v=>add('Pitch '+(v>0?'+':'')+v+'°',f=>f.camera.pitch+=v,'camera'));
-    [-3,3].forEach(v=>add('Roll '+(v>0?'+':'')+v+'°',f=>f.camera.roll=clamp(f.camera.roll+v,-45,45),'camera'));
-    [0.92,1.08].forEach(k=>add('Фокусное ×'+k.toFixed(2),f=>f.lens.focalMm=clamp(f.lens.focalMm*k,14,300),'lens'));
-    return out;
+    const add=(label,mutate,kind,delta)=>{
+      const f=cloneFrame(f0);
+      try{
+        mutate(f);
+        if(!f.camera || !Array.isArray(f.camera.pos) || f.camera.pos.length<3 ||
+           !Array.isArray(f.camera.target) || f.camera.target.length<3 ||
+           !f.lens || !Number.isFinite(f.lens.focalMm)) return;
+        if(![...f.camera.pos,...f.camera.target,f.camera.yaw,f.camera.pitch,f.camera.roll,f.lens.focalMm].every(Number.isFinite)) return;
+        out.push({label,kind,delta,frame:f});
+      }catch(_){}
+    };
+    const axisSteps=[
+      {axis:0,name:'X',step:0.35},
+      {axis:1,name:'Y',step:0.20},
+      {axis:2,name:'Z',step:0.35}
+    ];
+    axisSteps.forEach(({axis,name,step})=>[-step,step].forEach(v=>
+      add('Камера '+name+' '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.pos[axis]+=v;},'camera',{axis:name,value:v})
+    ));
+    [-4,4].forEach(v=>add('Yaw '+(v>0?'+':'')+v+'°',f=>{f.camera.yaw+=v;},'camera',{axis:'yaw',value:v}));
+    [-3,3].forEach(v=>add('Pitch '+(v>0?'+':'')+v+'°',f=>{f.camera.pitch=clamp(f.camera.pitch+v,-89,89);},'camera',{axis:'pitch',value:v}));
+    [-3,3].forEach(v=>add('Roll '+(v>0?'+':'')+v+'°',f=>{f.camera.roll=clamp(f.camera.roll+v,-45,45);},'camera',{axis:'roll',value:v}));
+    // В look-at режиме сдвиг цели даёт понятное перекадрирование без перемещения камеры.
+    [-0.25,0.25].forEach(v=>add('Цель по X '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[0]+=v;},'target',{axis:'x',value:v}));
+    [-0.20,0.20].forEach(v=>add('Цель по Y '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[1]+=v;},'target',{axis:'y',value:v}));
+    // Два относительных и два абсолютных шага позволяют не застревать на грубой сетке.
+    [0.90,0.96,1.04,1.10].forEach(k=>add('Фокусное ×'+k.toFixed(2),f=>{f.lens.focalMm=clamp(f.lens.focalMm*k,14,300);},'lens',{axis:'focalMm',factor:k}));
+    [-5,5].forEach(v=>add('Фокусное '+(v>0?'+':'')+v+' мм',f=>{f.lens.focalMm=clamp(f.lens.focalMm+v,14,300);},'lens',{axis:'focalMm',value:v}));
+    // У крайних значений не плодим идентичные варианты.
+    const seen=new Set();
+    return out.filter(c=>{
+      const key=[...c.frame.camera.pos,...c.frame.camera.target,c.frame.camera.yaw,c.frame.camera.pitch,c.frame.camera.roll,c.frame.lens.focalMm].map(v=>round(v,4)).join('|');
+      if(seen.has(key)) return false;
+      seen.add(key); return true;
+    });
+  }
+
+  function score(frame,profile){
+    const r=EvaluatorV2.evaluate(frame,profile);
+    return {total:Number.isFinite(r?.total)?r.total:0,result:r};
   }
 
   function improve(frame,profile){
-    const before=EvaluatorV2.evaluate(frame,profile);
-    const pool=candidates(frame);
+    const beforeFrame=cloneFrame(frame);
+    const base=score(beforeFrame,profile);
+    const pool=candidates(beforeFrame);
     let best=null;
+    const ranked=[];
     for(const c of pool){
-      const r=EvaluatorV2.evaluate(c.frame,profile);
-      if(!best || r.total>best.result.total) best={...c,result:r};
+      const scored=score(c.frame,profile);
+      const entry={...c,result:scored.result,deltaScore:scored.total-base.total};
+      ranked.push(entry);
+      if(!best || entry.result.total>best.result.total) best=entry;
     }
-    if(!best || best.result.total<=before.total+0.002) return {changed:false,before,best:null,checked:pool.length};
-    return {changed:true,before,best,checked:pool.length};
+    ranked.sort((a,b)=>b.result.total-a.result.total);
+    const changed=!!best && best.result.total>base.total+0.002;
+    const weak=base.result?.criteria?.filter(c=>Number.isFinite(c.s)).sort((a,b)=>a.s-b.s)[0]||null;
+    return {
+      changed,before:base.result,
+      best:changed?best:null,
+      checked:pool.length,
+      weakCriterion:weak?{name:weak.name||weak.label||'Критерий',score:weak.s,act:weak.act||''}:null,
+      alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.result.total,deltaScore:c.deltaScore})),
+      _test:{originalUnchanged:JSON.stringify(frame)===JSON.stringify(beforeFrame),candidateCount:pool.length}
+    };
   }
 
   function apply(result){
-    if(!result?.changed || !result.best) return false;
+    if(!result?.changed || !result.best?.frame) return false;
     const current=State.currentFrame();
+    if(!current?.camera || !current?.lens) return false;
+    const next=result.best.frame;
     State.History.tx(()=>{
-      current.camera=JSON.parse(JSON.stringify(result.best.frame.camera));
-      current.lens=JSON.parse(JSON.stringify(result.best.frame.lens));
+      current.camera=JSON.parse(JSON.stringify(next.camera));
+      current.lens=JSON.parse(JSON.stringify(next.lens));
     });
     State.save();
     return true;
   }
 
-  return {improve,apply};
+  return {improve,apply,_test:{candidates,score}};
 })();
 
 /* ============================================================
