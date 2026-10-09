@@ -4,8 +4,8 @@ Status: **applied to the main HTML; verified by reading the committed file back 
 Target branch: `67pocoyo`
 Target file: `deepseek_html_20261008_fbe883.html`
 Initial base blob SHA: `ed83d53303eafe06d5542781edf41d00d5a1a682`
-Latest implementation commit: `0a9eb0c2c228663b2b8a3a0104a1dfea9e45b75f`
-Latest HTML blob SHA: `c8c0632b9c015e2ef36d4a35bf4b8cd687138691`
+Latest implementation commit: `80d2a3795a2e5bad74f25942c1c1ae1a23209a81`
+Latest HTML blob SHA: `7846d14385e80bf47e455623f77b0a7fc0852bff`
 
 ## Problem
 
@@ -117,3 +117,11 @@ Added pure-function tests to the in-app test runner for: equal-weight objects ce
 ## Follow-up: 3D thickness and circle forms
 
 The circle primitive now has a form selector: flat circle, cylinder, or ellipsoid. Cylinder depth is aligned to the scene Z axis; ellipsoid uses sphere geometry and the existing X/Y/Z transform scale. Rectangle and polygon thickness fields are explicitly labeled as Z depth. Added in-app regression checks for the reported depth values. GitHub read-back verified the code and tests are present; live browser execution is still pending.
+
+
+## Follow-up: Z-axis scaling and Stage 6 optimizer UX
+
+- Fixed zero-depth geometry for rectangles, polygons, and flat circles. They now use a minimal 0.05 m geometric depth, so scaling an object on Z changes visible thickness instead of only changing a stored scale value. Explicit extrusion values still take precedence.
+- The Improve panel now shows the concrete before → after value for each camera/target/lens candidate.
+- Added “Применить половину шага” alongside full application; the half-step interpolates camera and focal-length values from the current state toward the selected candidate.
+- Added in-app regression checks for editable Z depth and half-step interpolation. GitHub read-back confirms these changes are present in blob `7846d14385e80bf47e455623f77b0a7fc0852bff`; browser execution is still pending.
