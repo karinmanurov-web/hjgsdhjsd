@@ -5809,6 +5809,7 @@ function runTests(){
       ok('ImproveEngine: оценка возвращает конечный балл',Number.isFinite(result.before.total));
       ok('ImproveEngine: число проверенных совпадает с пулом',result.checked===pool.length);
       ok('ImproveEngine: предложение строго лучше порога либо отсутствует',result.changed ? result.best.result.total>result.before.total+0.002 : result.best===null);
+      ok('ImproveEngine: три альтернативы доступны даже без улучшения',result.alternatives.length===Math.min(3,pool.length)&&result.alternatives.every(a=>!!a.candidate?.frame));
       ok('ImproveEngine: исходный кадр не меняется после оценки',JSON.stringify(source)===before);
       ok('ImproveEngine: до трёх альтернатив отсортированы по баллу',result.alternatives.length<=3&&result.alternatives.every((a,i,arr)=>i===0||arr[i-1].total>=a.total));
     }catch(e){
