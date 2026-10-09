@@ -1,9 +1,11 @@
 # Stage 5 patch — composition centroid for balance
 
-Status: **prepared, not applied to the main HTML**.
+Status: **applied to the main HTML; verified by reading the committed file back from GitHub**.
 Target branch: `67pocoyo`
 Target file: `deepseek_html_20261008_fbe883.html`
-Base blob SHA when prepared: `ed83d53303eafe06d5542781edf41d00d5a1a682`
+Initial base blob SHA: `ed83d53303eafe06d5542781edf41d00d5a1a682`
+Latest implementation commit: `c799a7004b8bd433ae35479c710d52031a7fd94d`
+Latest HTML blob SHA: `4164559cfae3f70843fbec061eb7e4dd3758ccc9`
 
 ## Problem
 
@@ -100,3 +102,8 @@ const centroid = computeCompositionCentroid(frame, cam, mainBBox);
 - Test one centered object, a second object added on one side, and a hidden second object.
 - This is a projected-bounding-box approximation, not a pixel-accurate ID/depth map. Full ID/depth maps remain a separate Stage 5 task.
 - Do not change `EvaluatorV2` or `ImproveEngine` as part of this patch.
+
+
+## Follow-up correction
+
+The shared projected bounding-box helper now applies each object's Euler rotation and scale before projection. `computeMainObjBBox()` uses the same helper as the composition centroid, so the focus criterion and composition weighting share consistent screen-space bounds. Hidden objects and guides remain excluded. The file was fetched again after commit to verify the new blob SHA and helper definitions; live browser behavior has not yet been tested.
