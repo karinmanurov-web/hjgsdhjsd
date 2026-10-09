@@ -2850,28 +2850,39 @@ const Evaluator = (() => {
     return {u0, u1, v0, v1, u:(u0+u1)/2, v:(v0+v1)/2, area:(u1-u0)*(v1-v0)};
   }
 
+  function weightedCompositionCentroid(items){
+    let sumW = 0, sumU = 0, sumV = 0;
+    for(const item of items || []){
+      if(!item || !Number.isFinite(item.u) || !Number.isFinite(item.v) ||
+         !Number.isFinite(item.area) || item.area <= 0) continue;
+      let weight = Math.sqrt(item.area);
+      if(item.isMain) weight *= 1.35;
+      if(!Number.isFinite(weight) || weight <= 0) continue;
+      sumW += weight;
+      sumU += item.u * weight;
+      sumV += item.v * weight;
+    }
+    return sumW > 0 ? {u:sumU/sumW, v:sumV/sumW} : null;
+  }
+
   function computeCompositionCentroid(frame, cam, mainBBox){
     const root = SceneManager.getRenderInfo().rootGroup;
     root.updateMatrixWorld(true);
     cam.updateMatrixWorld(true);
 
     const objects = State.get().objects || [];
-    let sumW = 0, sumU = 0, sumV = 0;
+    const items = [];
     for(const obj of objects){
       const box = computeObjectScreenBBox(obj, frame, cam, root);
       if(!box) continue;
-      let weight = Math.sqrt(Math.max(0, box.area));
-      if(mainBBox && obj.id === mainBBox.objId) weight *= 1.35;
-      if(!Number.isFinite(weight) || weight <= 0) continue;
-      sumW += weight;
-      sumU += box.u * weight;
-      sumV += box.v * weight;
+      items.push({
+        u:box.u, v:box.v, area:box.area,
+        isMain:!!mainBBox && obj.id === mainBBox.objId
+      });
     }
-    return sumW > 0
-      ? {u:sumU/sumW, v:sumV/sumW}
-      : (mainBBox ? {u:mainBBox.u, v:mainBBox.v} : {u:0.5, v:0.5});
+    return weightedCompositionCentroid(items) ||
+      (mainBBox ? {u:mainBBox.u, v:mainBBox.v} : {u:0.5, v:0.5});
   }
-
   function evaluate(frame, profileName){
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
@@ -2971,7 +2982,7 @@ const Evaluator = (() => {
     };
   }
 
-  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus } };
+  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid } };
 })();
 
 /* ============================================================
@@ -5766,6 +5777,25 @@ function runTests(){
   {
     const r = Evaluator._test.s_thirds_fromPoint(0.5, 0.5);
     t('S_thirds в центре', r.s, 0.29, 0.02);
+  }
+
+  // Центр композиции: среднее по массам и дополнительный вес главного объекта.
+  {
+    const midpoint = Evaluator._test.weightedCompositionCentroid([
+      {u:0.25,v:0.5,area:0.25},
+      {u:0.75,v:0.5,area:0.25}
+    ]);
+    t('Центр композиции: равные массы дают середину', midpoint?.u ?? NaN, 0.5, 0.001);
+    const mainWeighted = Evaluator._test.weightedCompositionCentroid([
+      {u:0.25,v:0.5,area:0.25,isMain:true},
+      {u:0.75,v:0.5,area:0.25}
+    ]);
+    ok('Центр композиции: главный объект имеет дополнительный вес', !!mainWeighted && mainWeighted.u < 0.5);
+    const empty = Evaluator._test.weightedCompositionCentroid([
+      {u:0.5,v:0.5,area:0},
+      {u:NaN,v:0.5,area:1}
+    ]);
+    ok('Центр композиции: пустые/некорректные массы игнорируются', empty === null);
   }
 
   // Базовые evaluator API
