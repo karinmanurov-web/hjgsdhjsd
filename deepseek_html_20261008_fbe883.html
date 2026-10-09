@@ -3008,7 +3008,8 @@ const EvaluatorV2 = (() => {
     const headroom=gauss(Math.abs(safeB.v0-0.16),0.12);
     const shotScale=gauss(Math.log(Math.max(0.004,safeB.area)/0.18),0.8);
     const negative=gauss(Math.log(Math.max(0.004,1-safeB.area)/0.82),0.7);
-    const frameObjects=visibleObjects(frame);\n    const simplicity=clamp(1-Math.max(0,frameObjects.length-3)*0.14);
+    const frameObjects=visibleObjects(frame);
+    const simplicity=clamp(1-Math.max(0,frameObjects.length-3)*0.14);
     const symmetry=gauss(Math.abs(cx-0.5),0.18);
     const tilt=gauss(Math.abs(frame.camera?.roll||0),5);
     const color=colorHarmony(frame);
