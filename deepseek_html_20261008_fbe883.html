@@ -4237,8 +4237,57 @@ const UI = (() => {
             '<div class="iaGrid"><div class="iaCell"><div class="iaMuted">Сейчас</div><div class="iaScore">'+b+'%</div></div>'+
             '<div class="iaCell"><div class="iaMuted">'+(hasGain?'Лучший результат':'Лучший эксперимент')+'</div><div class="iaScore">'+Math.round((result.alternatives?.[0]?.total??result.before.total)*100)+'%</div></div></div>'+
             '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || (hasGain?'Вариант выбран по суммарной оценке профиля.':'Все проверенные изменения оценены не выше текущего кадра; можно посмотреть ближайшие эксперименты.'))+'</div>'+
+            '<div class="iaGhostWrap" style="margin-top:10px;padding:8px;border:1px solid #48484d;border-radius:8px;background:#171719">'+
+              '<div style="font-weight:600;margin-bottom:4px">Призрак «было / стало»</div>'+
+              '<div class="iaMuted" style="margin-bottom:6px">Новый кадр — снизу, исходный — полупрозрачным слоем; стрелка показывает сдвиг главного объекта.</div>'+
+              '<canvas id="iaGhostCanvas" style="display:block;width:100%;height:auto;max-height:280px;object-fit:contain"></canvas>'+
+            '</div>'+
             '<div class="iaMuted" style="margin-top:8px;font-weight:600">Три лучших варианта:</div>'+alternatives+
             '<div class="iaActions"><button id="btnImproveReject">Закрыть</button></div>';
+          // ТЗ 10.3: наложение исходного кадра полупрозрачным слоем на лучший вариант + стрелка сдвига главного объекта.
+          try{
+            const ghostCanvas=document.getElementById('iaGhostCanvas');
+            const bestCandidate=result.alternatives?.[0]?.candidate;
+            const rendererInfo=FrameRenderer.renderFrame(frame);
+            const afterInfo=bestCandidate ? FrameRenderer.renderFrame(bestCandidate.frame) : null;
+            if(ghostCanvas && rendererInfo && afterInfo){
+              const gw=rendererInfo.w, gh=rendererInfo.h;
+              ghostCanvas.width=gw; ghostCanvas.height=gh;
+              const gctx=ghostCanvas.getContext('2d');
+              const makePixels=(info)=>{
+                const c=document.createElement('canvas'); c.width=info.w; c.height=info.h;
+                const x=c.getContext('2d');
+                const data=new ImageData(new Uint8ClampedArray(info.pixels),info.w,info.h);
+                x.putImageData(data,0,0);
+                const flipped=document.createElement('canvas'); flipped.width=info.w; flipped.height=info.h;
+                const fx=flipped.getContext('2d'); fx.translate(0,info.h); fx.scale(1,-1); fx.drawImage(c,0,0);
+                return flipped;
+              };
+              const beforeImg=makePixels(rendererInfo), afterImg=makePixels(afterInfo);
+              gctx.clearRect(0,0,gw,gh); gctx.globalAlpha=1; gctx.drawImage(afterImg,0,0);
+              gctx.globalAlpha=0.34; gctx.drawImage(beforeImg,0,0); gctx.globalAlpha=1;
+              const bb0=result.before?.mainBBox || EvaluatorV2.evaluate(frame,profile).mainBBox;
+              const bb1=EvaluatorV2.evaluate(bestCandidate.frame,profile).mainBBox;
+              if(bb0 && bb1){
+                const x0=((bb0.u0+bb0.u1)/2)*gw, y0=((bb0.v0+bb0.v1)/2)*gh;
+                const x1=((bb1.u0+bb1.u1)/2)*gw, y1=((bb1.v0+bb1.v1)/2)*gh;
+                const dx=x1-x0, dy=y1-y0;
+                gctx.save(); gctx.strokeStyle='#ffdf5d'; gctx.fillStyle='#ffdf5d';
+                gctx.lineWidth=Math.max(2,gw/260); gctx.setLineDash([gw/180,gw/240]);
+                gctx.beginPath(); gctx.arc(x0,y0,Math.max(5,gw/90),0,Math.PI*2); gctx.stroke();
+                gctx.setLineDash([]); gctx.lineWidth=Math.max(2,gw/220);
+                gctx.beginPath(); gctx.moveTo(x0,y0); gctx.lineTo(x1,y1); gctx.stroke();
+                const a=Math.atan2(dy,dx), head=Math.max(8,gw/45);
+                gctx.beginPath(); gctx.moveTo(x1,y1);
+                gctx.lineTo(x1-head*Math.cos(a-Math.PI/6),y1-head*Math.sin(a-Math.PI/6));
+                gctx.lineTo(x1-head*Math.cos(a+Math.PI/6),y1-head*Math.sin(a+Math.PI/6)); gctx.closePath(); gctx.fill();
+                gctx.font='600 '+Math.max(11,gw/65)+'px sans-serif'; gctx.fillText('было',Math.max(4,x0+6),Math.max(14,y0-8)); gctx.fillText('стало',Math.max(4,x1+6),Math.max(14,y1-8));
+                gctx.restore();
+              }
+            } else if(ghostCanvas){
+              ghostCanvas.parentElement.innerHTML='<div class="iaMuted">Для призрака нужен открытый предпросмотр кадра.</div>';
+            }
+          }catch(ghostError){ console.warn('Before/after ghost preview failed',ghostError); }
           // Живой пересчёт итога при смене галочек: показываем балл выбранного набора и нарушение замысла.
           const refreshSel=(i)=>{
             const parts=chosenParts(i);
