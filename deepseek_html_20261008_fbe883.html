@@ -4221,6 +4221,7 @@ const UI = (() => {
           const alternatives=(result.alternatives||[]).slice(0,3).map((c,i)=>
             '<div class="iaAlt" style="border-top:1px solid #343438;padding-top:6px;margin-top:6px">'+
               '<div class="iaHead"><span>'+(i+1)+'. '+escapeHtml(c.label)+'</span><span class="iaMuted">'+Math.round(c.total*100)+'%</span></div>'+
+              '<div class="iaActions" style="margin-top:4px"><button class="iaGhostPick" data-variant="'+i+'">Показать на кадре</button></div>'+
               (partList(c).length>=2
                 ? '<div class="iaParts" data-variant="'+i+'">'+partList(c).map(pt=>'<label><input type="checkbox" class="iaPart" data-variant="'+i+'" data-part="'+pt.id+'" checked>'+escapeHtml(pt.text)+'</label>').join('')+'</div>'
                 : '<div class="iaMuted">'+escapeHtml(changeText(c))+'</div>')+
@@ -4244,30 +4245,29 @@ const UI = (() => {
             '</div>'+
             '<div class="iaMuted" style="margin-top:8px;font-weight:600">Три лучших варианта:</div>'+alternatives+
             '<div class="iaActions"><button id="btnImproveReject">Закрыть</button></div>';
-          // ТЗ 10.3: наложение исходного кадра полупрозрачным слоем на лучший вариант + стрелка сдвига главного объекта.
-          try{
-            const ghostCanvas=document.getElementById('iaGhostCanvas');
-            const bestCandidate=result.alternatives?.[0]?.candidate;
-            const rendererInfo=FrameRenderer.renderFrame(frame);
-            const afterInfo=bestCandidate ? FrameRenderer.renderFrame(bestCandidate.frame) : null;
-            if(ghostCanvas && rendererInfo && afterInfo){
-              const gw=rendererInfo.w, gh=rendererInfo.h;
+          // ТЗ 10.3: выбранный вариант сравнивается с исходным кадром в призрачном оверлее.
+          const drawGhostPreview=(candidateFrame)=>{
+            try{
+              const ghostCanvas=document.getElementById('iaGhostCanvas');
+              const beforeInfo=FrameRenderer.renderFrame(frame);
+              const afterInfo=candidateFrame ? FrameRenderer.renderFrame(candidateFrame) : null;
+              if(!ghostCanvas || !beforeInfo || !afterInfo) return;
+              const gw=beforeInfo.w, gh=beforeInfo.h;
               ghostCanvas.width=gw; ghostCanvas.height=gh;
               const gctx=ghostCanvas.getContext('2d');
               const makePixels=(info)=>{
                 const c=document.createElement('canvas'); c.width=info.w; c.height=info.h;
                 const x=c.getContext('2d');
-                const data=new ImageData(new Uint8ClampedArray(info.pixels),info.w,info.h);
-                x.putImageData(data,0,0);
+                x.putImageData(new ImageData(new Uint8ClampedArray(info.pixels),info.w,info.h),0,0);
                 const flipped=document.createElement('canvas'); flipped.width=info.w; flipped.height=info.h;
                 const fx=flipped.getContext('2d'); fx.translate(0,info.h); fx.scale(1,-1); fx.drawImage(c,0,0);
                 return flipped;
               };
-              const beforeImg=makePixels(rendererInfo), afterImg=makePixels(afterInfo);
+              const beforeImg=makePixels(beforeInfo), afterImg=makePixels(afterInfo);
               gctx.clearRect(0,0,gw,gh); gctx.globalAlpha=1; gctx.drawImage(afterImg,0,0);
               gctx.globalAlpha=0.34; gctx.drawImage(beforeImg,0,0); gctx.globalAlpha=1;
               const bb0=result.before?.mainBBox || EvaluatorV2.evaluate(frame,profile).mainBBox;
-              const bb1=EvaluatorV2.evaluate(bestCandidate.frame,profile).mainBBox;
+              const bb1=EvaluatorV2.evaluate(candidateFrame,profile).mainBBox;
               if(bb0 && bb1){
                 const x0=((bb0.u0+bb0.u1)/2)*gw, y0=((bb0.v0+bb0.v1)/2)*gh;
                 const x1=((bb1.u0+bb1.u1)/2)*gw, y1=((bb1.v0+bb1.v1)/2)*gh;
@@ -4281,13 +4281,21 @@ const UI = (() => {
                 gctx.beginPath(); gctx.moveTo(x1,y1);
                 gctx.lineTo(x1-head*Math.cos(a-Math.PI/6),y1-head*Math.sin(a-Math.PI/6));
                 gctx.lineTo(x1-head*Math.cos(a+Math.PI/6),y1-head*Math.sin(a+Math.PI/6)); gctx.closePath(); gctx.fill();
-                gctx.font='600 '+Math.max(11,gw/65)+'px sans-serif'; gctx.fillText('было',Math.max(4,x0+6),Math.max(14,y0-8)); gctx.fillText('стало',Math.max(4,x1+6),Math.max(14,y1-8));
+                gctx.font='600 '+Math.max(11,gw/65)+'px sans-serif';
+                gctx.fillText('было',Math.max(4,x0+6),Math.max(14,y0-8));
+                gctx.fillText('стало',Math.max(4,x1+6),Math.max(14,y1-8));
                 gctx.restore();
               }
-            } else if(ghostCanvas){
-              ghostCanvas.parentElement.innerHTML='<div class="iaMuted">Для призрака нужен открытый предпросмотр кадра.</div>';
-            }
-          }catch(ghostError){ console.warn('Before/after ghost preview failed',ghostError); }
+              el.improveBox.querySelectorAll('.iaGhostPick').forEach(b=>b.classList.toggle('on',result.alternatives?.[Number(b.dataset.variant)]?.candidate?.frame===candidateFrame));
+            }catch(ghostError){ console.warn('Before/after ghost preview failed',ghostError); }
+          };
+          drawGhostPreview(result.alternatives?.[0]?.candidate?.frame);
+          el.improveBox.querySelectorAll('.iaGhostPick').forEach(btn=>{
+            btn.addEventListener('click',()=>{
+              const candidate=result.alternatives?.[Number(btn.dataset.variant)]?.candidate;
+              if(candidate?.frame) drawGhostPreview(candidate.frame);
+            });
+          });
           // Живой пересчёт итога при смене галочек: показываем балл выбранного набора и нарушение замысла.
           const refreshSel=(i)=>{
             const parts=chosenParts(i);
