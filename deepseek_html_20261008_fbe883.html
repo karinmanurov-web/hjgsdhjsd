@@ -398,6 +398,14 @@
           <div id="freeList"></div>
         </div>
         <div class="row">
+          <label title="Насколько далеко «Улучшить» может уйти от вашего кадра">Сила улучшения</label>
+          <select id="improveStrengthSel">
+            <option value="soft">Мягко (2° / 2%)</option>
+            <option value="medium">Средне (5° / 5%)</option>
+            <option value="strong">Сильно (10° / 10%)</option>
+          </select>
+        </div>
+        <div class="row">
           <button id="btnReeval">Пересчитать</button>
           <button id="btnImprove" class="on">✦ Улучшить</button>
           <button id="btnEvalAuto" class="on">Авто</button>
@@ -725,6 +733,7 @@ const State = (() => {
     sceneRotation: { rx: 0, ry: 0, rz: 0 },
     grids: defaultGrids(),
     evalProfile: 'classic',
+    improveStrength: 'medium',                   // «Улучшить»: soft | medium | strong
     groups: [],                                  // [{id,name,collapsed}]; у объекта — groupId
     freeProfile: { enabled: {}, weights: {} },   // профиль «Свободный»; недостающие id добивает EvaluatorV2.normalizeFree
     evalAuto: true
@@ -854,6 +863,7 @@ const State = (() => {
     if(project.viewMode === undefined) project.viewMode = 'normal';
     if(project.cvd === undefined) project.cvd = 'none';
     if(!project.evalProfile) project.evalProfile = 'classic';
+    if(!['soft','medium','strong'].includes(project.improveStrength)) project.improveStrength = 'medium';
     if(!Array.isArray(project.groups)) project.groups = [];
     if(!project.freeProfile || typeof project.freeProfile !== 'object') project.freeProfile = { enabled:{}, weights:{} };
     if(!project.freeProfile.enabled) project.freeProfile.enabled = {};
@@ -3126,6 +3136,33 @@ const Evaluator = (() => {
     return rasterizeIDDepthMap(projected,W,H);
   }
 
+  // Экранные рамки всех видимых объектов кадра (в долях кадра, без обрезки по краям) —
+  // вход для «графа отношений» оптимизатора. Объекты полностью вне кадра не попадают в список.
+  function screenItems(frame){
+    const lens=FrameAdapter.lensOf(frame);
+    const cam=CameraRig.apply(FrameAdapter.frameToShot(frame),lens);
+    const root=SceneManager.getRenderInfo().rootGroup;
+    root.updateMatrixWorld(true); cam.updateMatrixWorld(true);
+    const camPos=new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+    const out=[];
+    for(const obj of (State.get().objects||[])){
+      const box=computeObjectScreenBBox(obj,frame,cam,root);
+      if(!box) continue;
+      if(box.rawU1<=0||box.rawU0>=1||box.rawV1<=0||box.rawV0>=1) continue;
+      const ov=frame.overrides?.[obj.id]||{};
+      const tr={...(obj.transform||{}),...(ov.transform||{})};
+      const world=new THREE.Vector3(...(tr.pos||[0,0,0])).applyMatrix4(root.matrixWorld);
+      // Куда «смотрит» объект относительно кадра: -1 влево, +1 вправо, 0 — к камере/от неё или не задано.
+      let facingX=0;
+      if(Array.isArray(obj.facing)&&obj.facing.length>=3){
+        const d=new THREE.Vector3(...obj.facing).transformDirection(root.matrixWorld).transformDirection(cam.matrixWorldInverse);
+        if(Number.isFinite(d.x)&&Math.abs(d.x)>0.2) facingX=Math.sign(d.x);
+      }
+      out.push({id:obj.id,u0:box.rawU0,u1:box.rawU1,v0:box.rawV0,v1:box.rawV1,depth:world.distanceTo(camPos),facingX});
+    }
+    return out;
+  }
+
   function evaluate(frame, profileName){
     const lens = FrameAdapter.lensOf(frame);
     const shot = FrameAdapter.frameToShot(frame);
@@ -3236,7 +3273,7 @@ const Evaluator = (() => {
     };
   }
 
-  return { evaluate, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint, rasterizeIDDepthMap } };
+  return { evaluate, screenItems, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint, rasterizeIDDepthMap } };
 })();
 
 /* ============================================================
@@ -3420,10 +3457,121 @@ const ImproveEngine = (() => {
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const cloneFrame=f=>JSON.parse(JSON.stringify(f));
   const round=(v,n=2)=>Number(v.toFixed(n));
+  const now=()=>typeof performance!=='undefined'?performance.now():Date.now();
 
-  // Кандидаты — небольшие, обратимые шаги вокруг текущего кадра.
-  // Оценщик сравнивает их по тому же профилю, который выбран пользователем.
-  function candidates(frame){
+  /* ---- Сила коррекции (ТЗ 10.1) и охрана замысла (ТЗ 10.2): чистая логика ---- */
+  // pos — доля расстояния «камера → главный объект» (для сдвига камеры и цели), angle — градусы,
+  // focal — доля фокусного (ТЗ: до ~15% на «Сильно»), lambda — штраф за отклонение в J = Score − λ·D.
+  const STRENGTHS={
+    soft:  {label:'Мягко',  angle:2,  pos:0.02, focal:0.05, lambda:0.06},
+    medium:{label:'Средне', angle:5,  pos:0.05, focal:0.10, lambda:0.04},
+    strong:{label:'Сильно', angle:10, pos:0.10, focal:0.15, lambda:0.02}
+  };
+  function strengthLimits(strength,distance){
+    const s=STRENGTHS[strength]||STRENGTHS.medium;
+    const d=Math.max(1,Number.isFinite(distance)?distance:3);   // у самого объекта лимит не схлопывается в ноль
+    return {angle:s.angle,pos:s.pos*d,target:s.pos*d,focal:s.focal,lambda:s.lambda};
+  }
+  const angDelta=(a,b)=>(((b-a)%360)+540)%360-180;               // кратчайшая знаковая разница углов
+  const dist3=(a,b)=>Math.hypot((a[0]||0)-(b[0]||0),(a[1]||0)-(b[1]||0),(a[2]||0)-(b[2]||0));
+  // Насколько кадр f1 ушёл от исходного f0 (всегда считаем от исходного, а не от предыдущего шага).
+  function frameDeviation(f0,f1){
+    const fl0=f0.lens.focalMm,fl1=f1.lens.focalMm;
+    return {
+      pos:dist3(f0.camera.pos,f1.camera.pos),
+      target:dist3(f0.camera.target,f1.camera.target),
+      yaw:Math.abs(angDelta(f0.camera.yaw,f1.camera.yaw)),
+      pitch:Math.abs(f1.camera.pitch-f0.camera.pitch),
+      roll:Math.abs(f1.camera.roll-f0.camera.roll),
+      focal:(Number.isFinite(fl0)&&fl0>0&&Number.isFinite(fl1))?Math.abs(fl1/fl0-1):Infinity
+    };
+  }
+  function withinLimits(dev,lim){
+    const e=1e-9;
+    return dev.pos<=lim.pos+e&&dev.target<=lim.target+e&&dev.yaw<=lim.angle+e&&
+           dev.pitch<=lim.angle+e&&dev.roll<=lim.angle+e&&dev.focal<=lim.focal+e;
+  }
+  // D из ТЗ: средняя доля израсходованного бюджета по шести параметрам (0 — не тронуто, 1 — все на пределе).
+  function deviationCost(dev,lim){
+    return (dev.pos/lim.pos+dev.target/lim.target+dev.yaw/lim.angle+dev.pitch/lim.angle+dev.roll/lim.angle+dev.focal/lim.focal)/6;
+  }
+  // Граф отношений кадра: порядок слева-направо и сверху-вниз, порядок по размеру, перекрытия (кто спереди),
+  // направление взгляда. Зона нечувствительности (EPS) не даёт «мерцать» почти равным парам.
+  const REL={pos:0.01,size:1.15,overlap:0.05,gap:0.01};
+  function relationGraph(items){
+    const list=(items||[]).filter(Boolean).map(it=>({
+      id:it.id,u0:it.u0,u1:it.u1,v0:it.v0,v1:it.v1,depth:it.depth,facingX:it.facingX||0,
+      cx:(it.u0+it.u1)/2,cy:(it.v0+it.v1)/2,area:Math.max(0,(it.u1-it.u0)*(it.v1-it.v0))
+    }));
+    const objects={},pairs={};
+    for(const o of list) objects[o.id]={facingX:o.facingX};
+    for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++){
+      const a=list[i],b=list[j];
+      const sgn=(x,eps)=>Math.abs(x)>eps?Math.sign(x):0;
+      const ix=Math.max(0,Math.min(a.u1,b.u1)-Math.max(a.u0,b.u0));
+      const iy=Math.max(0,Math.min(a.v1,b.v1)-Math.max(a.v0,b.v0));
+      const minArea=Math.max(1e-9,Math.min(a.area,b.area));
+      const ratio=(ix*iy)/minArea;
+      const gap=Math.max(Math.max(a.u0-b.u1,b.u0-a.u1),Math.max(a.v0-b.v1,b.v0-a.v1));
+      const overlap=ratio>REL.overlap?'yes':(ix*iy===0&&gap>REL.gap?'no':'edge');
+      const sr=b.area>0?a.area/b.area:1;
+      pairs[a.id+'|'+b.id]={
+        h:sgn(a.cx-b.cx,REL.pos),v:sgn(a.cy-b.cy,REL.pos),
+        size:sr>REL.size?1:(sr<1/REL.size?-1:0),
+        overlap,front:overlap==='yes'?(a.depth<b.depth?1:-1):0
+      };
+    }
+    return {objects,pairs};
+  }
+  // Что изменилось в замысле автора: список нарушений g0 → g1 (пустой список = замысел сохранён).
+  function graphViolations(g0,g1){
+    const out=[];
+    for(const id of Object.keys(g0.objects)){
+      if(!g1.objects[id]) out.push({type:'lost',id});
+      else if(g0.objects[id].facingX!==0&&g1.objects[id].facingX!==g0.objects[id].facingX) out.push({type:'facing',id});
+    }
+    for(const key of Object.keys(g0.pairs)){
+      const p0=g0.pairs[key],p1=g1.pairs[key];
+      if(!p1) continue;                                   // потерянный объект уже учтён выше
+      if(p0.h!==0&&p1.h!==p0.h) out.push({type:'order-h',pair:key});
+      if(p0.v!==0&&p1.v!==p0.v) out.push({type:'order-v',pair:key});
+      if(p0.size!==0&&p1.size!==p0.size) out.push({type:'size',pair:key});
+      if(p0.overlap==='yes'&&p1.overlap!=='yes') out.push({type:'overlap-lost',pair:key});
+      else if(p0.overlap==='no'&&p1.overlap==='yes') out.push({type:'overlap-new',pair:key});
+      else if(p0.overlap==='yes'&&p1.overlap==='yes'&&p0.front!==p1.front) out.push({type:'front',pair:key});
+    }
+    return out;
+  }
+  // Человеческое описание правки (для панели «Улучшить»).
+  function describeChange(f0,f1){
+    const dev=frameDeviation(f0,f1),parts=[];
+    const sg=v=>(v>0?'+':'')+v.toFixed(1)+'°';
+    if(dev.pos>1e-6) parts.push('камера сдвинута на '+dev.pos.toFixed(2)+' м');
+    if(dev.target>1e-6) parts.push('цель сдвинута на '+dev.target.toFixed(2)+' м');
+    const dy=angDelta(f0.camera.yaw,f1.camera.yaw),dp=f1.camera.pitch-f0.camera.pitch,dr=f1.camera.roll-f0.camera.roll;
+    if(Math.abs(dy)>0.05) parts.push('yaw '+sg(dy));
+    if(Math.abs(dp)>0.05) parts.push('pitch '+sg(dp));
+    if(Math.abs(dr)>0.05) parts.push('roll '+sg(dr));
+    if(Number.isFinite(dev.focal)&&dev.focal>1e-4) parts.push('фокусное '+f0.lens.focalMm.toFixed(1)+' → '+f1.lens.focalMm.toFixed(1)+' мм');
+    return parts.length?parts.join(' · '):'без изменений';
+  }
+  const VIOLATION_TEXT={lost:'объект вышел из кадра',facing:'сменилось направление взгляда','order-h':'поменялся порядок слева-направо',
+    'order-v':'поменялся порядок сверху-вниз',size:'поменялся порядок по размеру','overlap-lost':'пропало перекрытие',
+    'overlap-new':'появилось новое перекрытие',front:'поменялось, кто перекрывает кого'};
+
+  // Расстояние «камера → главный объект» — масштаб для лимитов сдвига.
+  function contextDistance(frame){
+    const cam=frame.camera||{},pos=cam.pos||[0,0,0];
+    const objs=State.get().objects||[];
+    const main=(cam.mainObjId&&objs.find(o=>o.id===cam.mainObjId))||objs.find(o=>o.role==='main');
+    let tp=cam.target||[0,0,0];
+    if(main){ const ov=frame.overrides?.[main.id]||{}; tp=({...(main.transform||{}),...(ov.transform||{})}).pos||tp; }
+    const d=dist3(pos,tp);
+    return Number.isFinite(d)?d:3;
+  }
+
+  // Кандидаты — небольшие обратимые шаги вокруг кадра; размер шага — доля лимита выбранной силы.
+  function candidates(frame,lim=strengthLimits('medium',3)){
     const f0=cloneFrame(frame), out=[];
     const add=(label,mutate,kind,delta)=>{
       const f=cloneFrame(f0);
@@ -3436,30 +3584,31 @@ const ImproveEngine = (() => {
         out.push({label,kind,delta,frame:f});
       }catch(_){}
     };
-    const axisSteps=[
-      {axis:0,name:'X',step:0.35},
-      {axis:1,name:'Y',step:0.20},
-      {axis:2,name:'Z',step:0.35}
-    ];
-    axisSteps.forEach(({axis,name,step})=>[step,-step,step*2.5,-step*2.5].forEach(v=>
-      add('Камера '+name+' '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.pos[axis]+=v;},'camera',{axis:name,value:v})
-    ));
-    [-12,-8,-4,4,8,12].forEach(v=>add('Yaw '+(v>0?'+':'')+v+'°',f=>{f.camera.yaw+=v;},'camera',{axis:'yaw',value:v}));
-    [-8,-5,-3,3,5,8].forEach(v=>add('Pitch '+(v>0?'+':'')+v+'°',f=>{f.camera.pitch=clamp(f.camera.pitch+v,-89,89);},'camera',{axis:'pitch',value:v}));
-    [-8,-3,3,8].forEach(v=>add('Roll '+(v>0?'+':'')+v+'°',f=>{f.camera.roll=clamp(f.camera.roll+v,-45,45);},'camera',{axis:'roll',value:v}));
+    const fr=[1,0.5,0.25], sgn=v=>(v>0?'+':'')+round(v,3);
+    [[0,'X'],[1,'Y'],[2,'Z']].forEach(([axis,name])=>fr.forEach(k=>[1,-1].forEach(sg=>{
+      const v=sg*k*lim.pos;
+      add('Камера '+name+' '+sgn(v)+' м',f=>{f.camera.pos[axis]+=v;},'camera',{axis:name,value:v});
+    })));
+    [['yaw',null],['pitch',89],['roll',45]].forEach(([key,cap])=>fr.forEach(k=>[1,-1].forEach(sg=>{
+      const v=sg*k*lim.angle;
+      add(key[0].toUpperCase()+key.slice(1)+' '+(v>0?'+':'')+round(v,2)+'°',
+        f=>{f.camera[key]=cap?clamp(f.camera[key]+v,-cap,cap):f.camera[key]+v;},'camera',{axis:key,value:v});
+    })));
     // В look-at режиме сдвиг цели даёт понятное перекадрирование без перемещения камеры.
-    [-0.60,-0.25,0.25,0.60].forEach(v=>add('Цель по X '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[0]+=v;},'target',{axis:'x',value:v}));
-    [-0.45,-0.20,0.20,0.45].forEach(v=>add('Цель по Y '+(v>0?'+':'')+round(v)+' м',f=>{f.camera.target[1]+=v;},'target',{axis:'y',value:v}));
-    // Шире ищем масштаб плана: маленькие и заметные изменения.
-    [0.78,0.88,0.96,1.04,1.12,1.25].forEach(k=>add('Фокусное ×'+k.toFixed(2),f=>{f.lens.focalMm=clamp(f.lens.focalMm*k,14,300);},'lens',{axis:'focalMm',factor:k}));
-    [-12,-5,5,12].forEach(v=>add('Фокусное '+(v>0?'+':'')+v+' мм',f=>{f.lens.focalMm=clamp(f.lens.focalMm+v,14,300);},'lens',{axis:'focalMm',value:v}));
-    // У крайних значений не плодим идентичные варианты.
+    [[0,'X','x'],[1,'Y','y']].forEach(([i,name,ax])=>fr.forEach(k=>[1,-1].forEach(sg=>{
+      const v=sg*k*lim.target;
+      add('Цель по '+name+' '+sgn(v)+' м',f=>{f.camera.target[i]+=v;},'target',{axis:ax,value:v});
+    })));
+    fr.forEach(k=>[1,-1].forEach(sg=>{
+      const factor=1+sg*k*lim.focal;
+      add('Фокусное ×'+factor.toFixed(3),f=>{f.lens.focalMm=clamp(f.lens.focalMm*factor,14,300);},'lens',{axis:'focalMm',factor});
+    }));
+    return dedupe(out);
+  }
+  const frameKey=f=>[...f.camera.pos,...f.camera.target,f.camera.yaw,f.camera.pitch,f.camera.roll,f.lens.focalMm].map(v=>round(v,4)).join('|');
+  function dedupe(list){
     const seen=new Set();
-    return out.filter(c=>{
-      const key=[...c.frame.camera.pos,...c.frame.camera.target,c.frame.camera.yaw,c.frame.camera.pitch,c.frame.camera.roll,c.frame.lens.focalMm].map(v=>round(v,4)).join('|');
-      if(seen.has(key)) return false;
-      seen.add(key); return true;
-    });
+    return list.filter(c=>{const key=frameKey(c.frame);if(seen.has(key))return false;seen.add(key);return true;});
   }
 
   function score(frame,profile){
@@ -3470,31 +3619,62 @@ const ImproveEngine = (() => {
     return {total,result};
   }
 
-  function improve(frame,profile){
+  // Цель: max J = Score − λ·D при жёстких лимитах и неизменном графе отношений.
+  // Поиск шагами: каждый шаг — лучшая правка вокруг текущего кадра, но лимиты считаются от ИСХОДНОГО кадра.
+  function improve(frame,profile,opts={}){
+    const strength=STRENGTHS[opts.strength]?opts.strength:'medium';
+    const budgetMs=Number.isFinite(opts.timeBudgetMs)?opts.timeBudgetMs:2500;
+    const maxSteps=Number.isFinite(opts.maxSteps)?opts.maxSteps:3;
+    const t0=now();
     const beforeFrame=cloneFrame(frame);
+    const lim=strengthLimits(strength,contextDistance(beforeFrame));
+    const g0=relationGraph(Evaluator.screenItems(beforeFrame));
     const base=score(beforeFrame,profile);
-    const pool=candidates(beforeFrame);
-    let best=null;
-    const ranked=[];
-    for(const c of pool){
-      const scored=score(c.frame,profile);
-      const entry={...c,result:scored.result,total:scored.total,deltaScore:scored.total-base.total};
-      ranked.push(entry);
-      if(!best || entry.total>best.total) best=entry;
+    const ranked=[],trail=[],rejected={limit:0,design:0,reasons:{}};
+    const seen=new Set([frameKey(beforeFrame)]);
+    let cur={frame:beforeFrame,j:base.total},evaluated=0,truncated=false;
+    for(let step=0;step<maxSteps&&!truncated;step++){
+      let bestStep=null;
+      for(const c of candidates(cur.frame,lim)){
+        if(now()-t0>budgetMs){truncated=true;break;}
+        const key=frameKey(c.frame);
+        if(seen.has(key)) continue;
+        seen.add(key);
+        const dev=frameDeviation(beforeFrame,c.frame);
+        if(!withinLimits(dev,lim)){rejected.limit++;continue;}
+        const viol=graphViolations(g0,relationGraph(Evaluator.screenItems(c.frame)));
+        if(viol.length){
+          rejected.design++;
+          for(const v of viol) rejected.reasons[v.type]=(rejected.reasons[v.type]||0)+1;
+          continue;
+        }
+        const scored=score(c.frame,profile);
+        evaluated++;
+        const j=scored.total-lim.lambda*deviationCost(dev,lim);
+        const entry={...c,dev,result:scored.result,total:scored.total,j,deltaScore:scored.total-base.total,steps:step+1};
+        if(step>0) entry.label=trail.join(' → ')+' → '+c.label;
+        ranked.push(entry);
+        if(!bestStep||j>bestStep.j) bestStep=entry;
+      }
+      if(!bestStep||bestStep.j<=cur.j+0.001) break;
+      cur=bestStep; trail.push(bestStep.label.split(' → ').pop());
     }
-    ranked.sort((a,b)=>b.total-a.total);
-    const changed=!!best && best.result.total>base.total+0.002;
+    ranked.sort((a,b)=>b.j-a.j);
+    // «Лучшее» предлагаем только если оно реально лучше текущего кадра; эксперименты показываем всегда.
+    const best=ranked.find(e=>e.deltaScore>0.002)||null;
+    const changed=!!best;
     const weak=base.result?.criteria?.filter(c=>Number.isFinite(c.s)).sort((a,b)=>a.s-b.s)[0]||null;
     return {
       changed,before:base.result,
-      best:changed?best:null,
-      checked:pool.length,
+      best,
+      strength,limits:lim,rejected,truncated,
+      checked:evaluated,
+      considered:evaluated+rejected.limit+rejected.design,
       weakCriterion:weak?{name:weak.name||weak.label||'Критерий',score:weak.s,act:weak.act||''}:null,
       alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.total,deltaScore:c.deltaScore,candidate:c})),
       sourceFrameId:frame.id,
       _test:{
         originalUnchanged:JSON.stringify(frame)===JSON.stringify(beforeFrame),
-        candidateCount:pool.length,
         baselineCamera:JSON.stringify(beforeFrame.camera),
         baselineLens:JSON.stringify(beforeFrame.lens)
       }
@@ -3533,7 +3713,8 @@ const ImproveEngine = (() => {
     return true;
   }
 
-  return {improve,apply,_test:{candidates,score,blendFrame}};
+  return {improve,apply,strengths:STRENGTHS,describeChange,violationText:VIOLATION_TEXT,
+    _test:{candidates,score,blendFrame,strengthLimits,frameDeviation,withinLimits,deviationCost,relationGraph,graphViolations,describeChange,angDelta}};
 })();
 
 /* ============================================================
@@ -3617,6 +3798,7 @@ const UI = (() => {
       evalProfile: document.getElementById('evalProfile'),
       evalProfileSel: document.getElementById('evalProfileSel'),
       freeBox: document.getElementById('freeBox'),
+      improveStrengthSel: document.getElementById('improveStrengthSel'),
       freeList: document.getElementById('freeList'),
       btnFreeAll: document.getElementById('btnFreeAll'),
       btnFreeNone: document.getElementById('btnFreeNone'),
@@ -3944,6 +4126,11 @@ const UI = (() => {
       State.save(); buildFreeProfilePanel(); scheduleEval();
     });
     buildFreeProfilePanel();
+    el.improveStrengthSel.value = State.get().improveStrength || 'medium';
+    el.improveStrengthSel.addEventListener('change', () => {
+      State.History.tx(() => { State.get().improveStrength = el.improveStrengthSel.value; });
+      State.save();
+    });
     const freeBulk = (fn) => {
       State.History.tx(() => {
         const p = State.get();
@@ -3975,35 +4162,24 @@ const UI = (() => {
       el.improveBox.innerHTML='<div class="hint">Поиск лучшего малого изменения…</div>';
       requestAnimationFrame(() => {
         try{
-          const result=ImproveEngine.improve(frame,profile);
+          const strength=State.get().improveStrength||'medium';
+          const result=ImproveEngine.improve(frame,profile,{strength});
           const b=Math.round(result.before.total*100);
           const weak=result.weakCriterion;
           const hasGain=result.changed && result.best;
-          const changeText=(c)=>{
-            const f=c.candidate.frame, d=c.candidate.delta||{};
-            const fmt=(v)=>Number(v).toFixed(2);
-            if(c.kind==='lens') return 'Фокусное: '+fmt(frame.lens.focalMm)+' → '+fmt(f.lens.focalMm)+' мм';
-            if(c.kind==='target'){
-              const i=d.axis==='x'?0:1, name=d.axis==='x'?'X':'Y';
-              return 'Цель '+name+': '+fmt(frame.camera.target[i])+' → '+fmt(f.camera.target[i])+' м';
-            }
-            if(c.kind==='camera' && ['x','y','z'].includes(String(d.axis).toLowerCase())){
-              const i={x:0,y:1,z:2}[String(d.axis).toLowerCase()];
-              return 'Камера '+String(d.axis).toUpperCase()+': '+fmt(frame.camera.pos[i])+' → '+fmt(f.camera.pos[i])+' м';
-            }
-            if(c.kind==='camera' && ['yaw','pitch','roll'].includes(d.axis))
-              return d.axis.toUpperCase()+': '+fmt(frame.camera[d.axis])+'° → '+fmt(f.camera[d.axis])+'°';
-            return 'Было → стало: параметры камеры/объектива';
-          };
+          const changeText=(c)=>ImproveEngine.describeChange(frame,c.candidate.frame);
           const alternatives=(result.alternatives||[]).slice(0,3).map((c,i)=>
             '<div class="iaAlt" style="border-top:1px solid #343438;padding-top:6px;margin-top:6px">'+
               '<div class="iaHead"><span>'+(i+1)+'. '+escapeHtml(c.label)+'</span><span class="iaMuted">'+Math.round(c.total*100)+'%</span></div>'+
-              '<div class="iaMuted">'+escapeHtml(changeText(c))+'</div>'+
+              '<div class="iaMuted">'+escapeHtml(changeText(c))+(c.candidate.steps>1?' <i>('+c.candidate.steps+' шага)</i>':'')+'</div>'+
               '<div class="iaMuted">'+(c.deltaScore>=0?'+':'')+Math.round(c.deltaScore*100)+' п.п. к текущей оценке</div>'+
               '<div class="iaActions" style="margin-top:4px"><button class="iaTry" data-variant="'+i+'" data-fraction="1">'+(c.deltaScore>0.002?'Применить':'Попробовать')+'</button><button class="iaTry" data-variant="'+i+'" data-fraction="0.5">Применить половину шага</button></div>'+
             '</div>'
           ).join('');
-          el.improveBox.innerHTML='<div class="iaHead"><span>'+(hasGain?'Найдено улучшение':'Заметного улучшения не найдено')+'</span><span class="iaMuted">'+result.checked+' вариантов</span></div>'+
+          el.improveBox.innerHTML='<div class="iaHead"><span>'+(hasGain?'Найдено улучшение':'Заметного улучшения не найдено')+'</span><span class="iaMuted">'+escapeHtml(ImproveEngine.strengths[result.strength].label)+' · проверено '+result.considered+'</span></div>'+
+            '<div class="iaMuted" style="margin-top:4px">Лимиты: углы ±'+result.limits.angle+'°, камера ±'+result.limits.pos.toFixed(2)+' м, фокусное ±'+Math.round(result.limits.focal*100)+'%.'+
+              (result.rejected.design?' Охрана замысла отклонила '+result.rejected.design+' (напр.: '+escapeHtml(Object.keys(result.rejected.reasons).slice(0,2).map(k=>ImproveEngine.violationText[k]||k).join(', '))+').':'')+
+              (result.truncated?' Поиск остановлен по времени.':'')+'</div>'+
             '<div class="iaGrid"><div class="iaCell"><div class="iaMuted">Сейчас</div><div class="iaScore">'+b+'%</div></div>'+
             '<div class="iaCell"><div class="iaMuted">'+(hasGain?'Лучший результат':'Лучший эксперимент')+'</div><div class="iaScore">'+Math.round((result.alternatives?.[0]?.total??result.before.total)*100)+'%</div></div></div>'+
             '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || (hasGain?'Вариант выбран по суммарной оценке профиля.':'Все проверенные изменения оценены не выше текущего кадра; можно посмотреть ближайшие эксперименты.'))+'</div>'+
@@ -4138,6 +4314,7 @@ const UI = (() => {
     updateSceneRotSliders();
     updateFrameMeta();
     el.evalProfileSel.value = State.get().evalProfile || 'classic';
+    el.improveStrengthSel.value = State.get().improveStrength || 'medium';
     buildFreeProfilePanel();
     el.btnEvalAuto.classList.toggle('on', !!State.get().evalAuto);
     runEvaluationNow();
@@ -6526,29 +6703,61 @@ function runTests(){
     ok('Все кадры сохранены (20)', Q2.frames.length === 20);
   }
 
-  /* ---- Этап 6: поиск улучшений ---- */
+  /* ---- Этап 6: поиск улучшений, сила коррекции, охрана замысла ---- */
   {
+    const IT=ImproveEngine._test;
     const source=State.currentFrame();
     const before=JSON.stringify(source);
-    const pool=ImproveEngine._test.candidates(source);
+    const pool=IT.candidates(source);
     ok('ImproveEngine: есть расширенный набор кандидатов',pool.length>=20);
     ok('ImproveEngine: исходный кадр не мутируется при генерации',JSON.stringify(source)===before);
     ok('ImproveEngine: кандидаты сохраняют структуру камеры и объектива',pool.every(c=>Array.isArray(c.frame.camera.pos)&&Array.isArray(c.frame.camera.target)&&Number.isFinite(c.frame.lens.focalMm)));
     ok('ImproveEngine: фокусное не выходит за 14–300 мм',pool.every(c=>c.frame.lens.focalMm>=14&&c.frame.lens.focalMm<=300));
     const unique=new Set(pool.map(c=>JSON.stringify([c.frame.camera.pos,c.frame.camera.target,c.frame.camera.yaw,c.frame.camera.pitch,c.frame.camera.roll,c.frame.lens.focalMm])));
     ok('ImproveEngine: нет повторяющихся вариантов',unique.size===pool.length);
+
+    // Чистая логика: лимиты, отклонение, граф отношений.
+    const L=IT.strengthLimits('medium',5);
+    ok('Сила: «Средне» на 5 м = 5°, 0.25 м, 10%',L.angle===5&&Math.abs(L.pos-0.25)<1e-9&&Math.abs(L.focal-0.10)<1e-9);
+    ok('Сила: Мягко < Средне < Сильно',IT.strengthLimits('soft',5).angle<L.angle&&L.angle<IT.strengthLimits('strong',5).angle);
+    const fa={camera:{pos:[0,0,0],target:[0,0,-5],yaw:359,pitch:0,roll:0},lens:{focalMm:50}};
+    const fb={camera:{pos:[0,0,0],target:[0,0,-5],yaw:1,pitch:0,roll:0},lens:{focalMm:50}};
+    t('Сила: yaw 359°→1° = 2° (переход через 0)',IT.frameDeviation(fa,fb).yaw,2,1e-9);
+    ok('Сила: ровно на лимите допустимо, чуть дальше — нет',
+       IT.withinLimits({pos:0,target:0,yaw:5,pitch:0,roll:0,focal:0},L)&&!IT.withinLimits({pos:0,target:0,yaw:5.01,pitch:0,roll:0,focal:0},L));
+    const RR=(id,u0,u1,v0,v1,depth)=>({id,u0,u1,v0,v1,depth});
+    const g0=IT.relationGraph([RR('a',.1,.2,.4,.5,3),RR('b',.6,.8,.4,.6,5)]);
+    ok('Охрана: перестановка слева-направо — нарушение',IT.graphViolations(g0,IT.relationGraph([RR('a',.7,.8,.4,.5,3),RR('b',.1,.3,.4,.6,5)])).some(v=>v.type==='order-h'));
+    ok('Охрана: небольшой общий сдвиг замысел не нарушает',IT.graphViolations(g0,IT.relationGraph([RR('a',.15,.25,.4,.5,3),RR('b',.65,.85,.4,.6,5)])).length===0);
+    ok('Охрана: объект вышел из кадра — нарушение',IT.graphViolations(g0,IT.relationGraph([RR('b',.6,.8,.4,.6,5)])).some(v=>v.type==='lost'));
+    const ov=IT.relationGraph([RR('a',.3,.6,.3,.6,3),RR('b',.4,.7,.3,.6,5)]);
+    ok('Охрана: смена «кто перекрывает кого» — нарушение',IT.graphViolations(ov,IT.relationGraph([RR('a',.3,.6,.3,.6,6),RR('b',.4,.7,.3,.6,5)])).some(v=>v.type==='front'));
+    ok('Охрана: потеря перекрытия — нарушение',IT.graphViolations(ov,IT.relationGraph([RR('a',0,.2,.3,.6,3),RR('b',.5,.7,.3,.6,5)])).some(v=>v.type==='overlap-lost'));
+    ok('Охрана: описание правки без изменений',IT.describeChange(fa,fa)==='без изменений');
+
     try{
-      const result=ImproveEngine.improve(source,'classic');
-      ok('ImproveEngine: оценка возвращает конечный балл',Number.isFinite(result.before.total));
-      ok('ImproveEngine: число проверенных совпадает с пулом',result.checked===pool.length);
-      ok('ImproveEngine: предложение строго лучше порога либо отсутствует',result.changed ? result.best.result.total>result.before.total+0.002 : result.best===null);
-      ok('ImproveEngine: три альтернативы доступны даже без улучшения',result.alternatives.length===Math.min(3,pool.length)&&result.alternatives.every(a=>!!a.candidate?.frame));
-      ok('ImproveEngine: исходный кадр не меняется после оценки',JSON.stringify(source)===before);
-      const blend=ImproveEngine._test.blendFrame({camera:{pos:[0,0,0],target:[0,0,0],yaw:0,pitch:0,roll:0},lens:{focalMm:50}},{camera:{pos:[2,0,0],target:[0,0,0],yaw:10,pitch:0,roll:0},lens:{focalMm:70}},0.5);
+      for(const strength of ['soft','medium','strong']){
+        const result=ImproveEngine.improve(source,'classic',{strength});
+        const lim=result.limits;
+        const g=IT.relationGraph(Evaluator.screenItems(source));
+        const entries=[...(result.best?[result.best]:[]),...result.alternatives.map(a=>a.candidate)];
+        ok('ImproveEngine['+strength+']: оценка возвращает конечный балл',Number.isFinite(result.before.total));
+        ok('ImproveEngine['+strength+']: все предложения в пределах лимитов силы',entries.every(e=>IT.withinLimits(IT.frameDeviation(source,e.frame),lim)));
+        ok('ImproveEngine['+strength+']: все предложения сохраняют граф отношений',entries.every(e=>IT.graphViolations(g,IT.relationGraph(Evaluator.screenItems(e.frame))).length===0));
+        ok('ImproveEngine['+strength+']: предложение строго лучше порога либо отсутствует',result.changed ? result.best.result.total>result.before.total+0.002 : result.best===null);
+        ok('ImproveEngine['+strength+']: не более трёх альтернатив, отсортированы по J',result.alternatives.length<=3&&result.alternatives.every((a,i,arr)=>i===0||arr[i-1].candidate.j>=a.candidate.j));
+        ok('ImproveEngine['+strength+']: проверено = оценено + отклонено',result.considered===result.checked+result.rejected.limit+result.rejected.design);
+        ok('ImproveEngine['+strength+']: исходный кадр не меняется после оценки',JSON.stringify(source)===before);
+        if(result.changed){
+          const half=IT.blendFrame(source,result.best.frame,0.5);
+          ok('ImproveEngine['+strength+']: половина шага тоже в пределах лимитов',IT.withinLimits(IT.frameDeviation(source,half),lim));
+        }
+      }
+      const blend=IT.blendFrame({camera:{pos:[0,0,0],target:[0,0,0],yaw:0,pitch:0,roll:0},lens:{focalMm:50}},{camera:{pos:[2,0,0],target:[0,0,0],yaw:10,pitch:0,roll:0},lens:{focalMm:70}},0.5);
       t('ImproveEngine: половинное применение камеры',blend.camera.pos[0],1,0.001);
       t('ImproveEngine: половинное применение объектива',blend.lens.focalMm,60,0.001);
-      ok('ImproveEngine: до трёх альтернатив отсортированы по баллу',result.alternatives.length<=3&&result.alternatives.every((a,i,arr)=>i===0||arr[i-1].total>=a.total));
     }catch(e){
+      console.error(e);
       ok('ImproveEngine: оценка кандидатов выполняется без ошибки',false);
     }
   }
