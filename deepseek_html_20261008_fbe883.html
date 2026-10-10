@@ -223,6 +223,10 @@
   .improveBox .iaMuted{color:var(--fg2);font-size:11px}
   .improveBox .iaActions{display:flex;gap:6px;margin-top:7px}
   .improveBox .iaActions button{flex:1}
+  .improveBox .iaParts label{display:block;font-size:11px;color:var(--fg2);margin:2px 0;cursor:pointer}
+  .improveBox .iaParts input{margin-right:6px;vertical-align:middle}
+  .improveBox .iaSel{margin-top:2px}
+  .improveBox .iaSel.bad{color:#f44336}
   #lensCompareCanvas{border:1px solid var(--bd);border-radius:6px}
 </style>
 </head>
@@ -3542,18 +3546,35 @@ const ImproveEngine = (() => {
     }
     return out;
   }
-  // Человеческое описание правки (для панели «Улучшить»).
-  function describeChange(f0,f1){
+  // Правка по параметрам: каждый параметр можно принять или не принять отдельно.
+  const PART_IDS=['pos','target','yaw','pitch','roll','focal'];
+  function partTexts(f0,f1){
     const dev=frameDeviation(f0,f1),parts=[];
     const sg=v=>(v>0?'+':'')+v.toFixed(1)+'°';
-    if(dev.pos>1e-6) parts.push('камера сдвинута на '+dev.pos.toFixed(2)+' м');
-    if(dev.target>1e-6) parts.push('цель сдвинута на '+dev.target.toFixed(2)+' м');
+    if(dev.pos>1e-6) parts.push({id:'pos',text:'камера сдвинута на '+dev.pos.toFixed(2)+' м'});
+    if(dev.target>1e-6) parts.push({id:'target',text:'цель сдвинута на '+dev.target.toFixed(2)+' м'});
     const dy=angDelta(f0.camera.yaw,f1.camera.yaw),dp=f1.camera.pitch-f0.camera.pitch,dr=f1.camera.roll-f0.camera.roll;
-    if(Math.abs(dy)>0.05) parts.push('yaw '+sg(dy));
-    if(Math.abs(dp)>0.05) parts.push('pitch '+sg(dp));
-    if(Math.abs(dr)>0.05) parts.push('roll '+sg(dr));
-    if(Number.isFinite(dev.focal)&&dev.focal>1e-4) parts.push('фокусное '+f0.lens.focalMm.toFixed(1)+' → '+f1.lens.focalMm.toFixed(1)+' мм');
-    return parts.length?parts.join(' · '):'без изменений';
+    if(Math.abs(dy)>0.05) parts.push({id:'yaw',text:'yaw '+sg(dy)});
+    if(Math.abs(dp)>0.05) parts.push({id:'pitch',text:'pitch '+sg(dp)});
+    if(Math.abs(dr)>0.05) parts.push({id:'roll',text:'roll '+sg(dr)});
+    if(Number.isFinite(dev.focal)&&dev.focal>1e-4) parts.push({id:'focal',text:'фокусное '+f0.lens.focalMm.toFixed(1)+' → '+f1.lens.focalMm.toFixed(1)+' мм'});
+    return parts;
+  }
+  // Человеческое описание правки (для панели «Улучшить»).
+  function describeChange(f0,f1){
+    const parts=partTexts(f0,f1);
+    return parts.length?parts.map(p=>p.text).join(' · '):'без изменений';
+  }
+  // Кадр f0, в который перенесены только выбранные параметры из f1.
+  function mergeParts(f0,f1,parts){
+    const out=cloneFrame(f0),has=id=>parts.includes(id);
+    if(has('pos')) out.camera.pos=[...f1.camera.pos];
+    if(has('target')) out.camera.target=[...f1.camera.target];
+    if(has('yaw')) out.camera.yaw=f1.camera.yaw;
+    if(has('pitch')) out.camera.pitch=f1.camera.pitch;
+    if(has('roll')) out.camera.roll=f1.camera.roll;
+    if(has('focal')) out.lens.focalMm=f1.lens.focalMm;
+    return out;
   }
   const VIOLATION_TEXT={lost:'объект вышел из кадра',facing:'сменилось направление взгляда','order-h':'поменялся порядок слева-направо',
     'order-v':'поменялся порядок сверху-вниз',size:'поменялся порядок по размеру','overlap-lost':'пропало перекрытие',
@@ -3668,6 +3689,7 @@ const ImproveEngine = (() => {
       changed,before:base.result,
       best,
       strength,limits:lim,rejected,truncated,
+      origin:beforeFrame,                                 // исходный кадр: нужен для перепроверки частичного применения
       checked:evaluated,
       considered:evaluated+rejected.limit+rejected.design,
       weakCriterion:weak?{name:weak.name||weak.label||'Критерий',score:weak.s,act:weak.act||''}:null,
@@ -3696,7 +3718,21 @@ const ImproveEngine = (() => {
     return out;
   }
 
-  function apply(result, fraction=1){
+  // Что получится, если применить выбранные параметры варианта (и долю шага): итог и проверка замысла.
+  function previewParts(result,candidate,parts,profile,fraction=1){
+    const origin=result?.origin;
+    if(!origin||!candidate?.frame) return null;
+    const merged=mergeParts(origin,candidate.frame,parts||PART_IDS);
+    const frame=blendFrame(origin,merged,fraction);
+    const within=withinLimits(frameDeviation(origin,frame),result.limits);
+    const violations=graphViolations(relationGraph(Evaluator.screenItems(origin)),relationGraph(Evaluator.screenItems(frame)));
+    const total=score(frame,profile).total;
+    return {frame,total,deltaScore:total-result.before.total,within,violations,ok:within&&violations.length===0};
+  }
+
+  // parts — какие параметры варианта принять (по умолчанию все). Любое применение перепроверяется:
+  // лимиты силы и граф отношений должны выполняться и для частичного набора, и для «половины шага».
+  function apply(result, fraction=1, parts=null){
     if(!result?.changed || !result.best?.frame) return false;
     const current=State.currentFrame();
     if(!current?.camera || !current?.lens) return false;
@@ -3704,7 +3740,13 @@ const ImproveEngine = (() => {
     if(result.sourceFrameId && current.id!==result.sourceFrameId) return false;
     if(result._test?.baselineCamera && JSON.stringify(current.camera)!==result._test.baselineCamera) return false;
     if(result._test?.baselineLens && JSON.stringify(current.lens)!==result._test.baselineLens) return false;
-    const next=blendFrame(current,result.best.frame,fraction);
+    const chosen=parts?mergeParts(current,result.best.frame,parts):result.best.frame;
+    const next=blendFrame(current,chosen,fraction);
+    if(result.origin&&result.limits){
+      if(!withinLimits(frameDeviation(result.origin,next),result.limits)) return false;
+      const bad=graphViolations(relationGraph(Evaluator.screenItems(result.origin)),relationGraph(Evaluator.screenItems(next)));
+      if(bad.length) return false;
+    }
     State.History.tx(()=>{
       current.camera=JSON.parse(JSON.stringify(next.camera));
       current.lens=JSON.parse(JSON.stringify(next.lens));
@@ -3713,8 +3755,8 @@ const ImproveEngine = (() => {
     return true;
   }
 
-  return {improve,apply,strengths:STRENGTHS,describeChange,violationText:VIOLATION_TEXT,
-    _test:{candidates,score,blendFrame,strengthLimits,frameDeviation,withinLimits,deviationCost,relationGraph,graphViolations,describeChange,angDelta}};
+  return {improve,apply,previewParts,strengths:STRENGTHS,describeChange,partTexts,violationText:VIOLATION_TEXT,
+    _test:{candidates,score,blendFrame,strengthLimits,frameDeviation,withinLimits,deviationCost,relationGraph,graphViolations,describeChange,partTexts,mergeParts,angDelta}};
 })();
 
 /* ============================================================
@@ -4168,10 +4210,22 @@ const UI = (() => {
           const weak=result.weakCriterion;
           const hasGain=result.changed && result.best;
           const changeText=(c)=>ImproveEngine.describeChange(frame,c.candidate.frame);
+          const partList=(c)=>ImproveEngine.partTexts(frame,c.candidate.frame);
+          const reasonText=(pv)=>!pv.within?'выходит за лимиты силы':
+            [...new Set(pv.violations.map(v=>ImproveEngine.violationText[v.type]||v.type))].join(', ');
+          // Какие параметры варианта i сейчас отмечены (если галочек нет — принимаются все).
+          const chosenParts=(i)=>{
+            const boxes=el.improveBox.querySelectorAll('.iaPart[data-variant="'+i+'"]');
+            return boxes.length?[...boxes].filter(b=>b.checked).map(b=>b.dataset.part):null;
+          };
           const alternatives=(result.alternatives||[]).slice(0,3).map((c,i)=>
             '<div class="iaAlt" style="border-top:1px solid #343438;padding-top:6px;margin-top:6px">'+
               '<div class="iaHead"><span>'+(i+1)+'. '+escapeHtml(c.label)+'</span><span class="iaMuted">'+Math.round(c.total*100)+'%</span></div>'+
-              '<div class="iaMuted">'+escapeHtml(changeText(c))+(c.candidate.steps>1?' <i>('+c.candidate.steps+' шага)</i>':'')+'</div>'+
+              (partList(c).length>=2
+                ? '<div class="iaParts" data-variant="'+i+'">'+partList(c).map(pt=>'<label><input type="checkbox" class="iaPart" data-variant="'+i+'" data-part="'+pt.id+'" checked>'+escapeHtml(pt.text)+'</label>').join('')+'</div>'
+                : '<div class="iaMuted">'+escapeHtml(changeText(c))+'</div>')+
+              (c.candidate.steps>1?'<div class="iaMuted"><i>'+c.candidate.steps+' шага поиска</i></div>':'')+
+              '<div class="iaSel iaMuted" data-variant="'+i+'"></div>'+
               '<div class="iaMuted">'+(c.deltaScore>=0?'+':'')+Math.round(c.deltaScore*100)+' п.п. к текущей оценке</div>'+
               '<div class="iaActions" style="margin-top:4px"><button class="iaTry" data-variant="'+i+'" data-fraction="1">'+(c.deltaScore>0.002?'Применить':'Попробовать')+'</button><button class="iaTry" data-variant="'+i+'" data-fraction="0.5">Применить половину шага</button></div>'+
             '</div>'
@@ -4185,13 +4239,36 @@ const UI = (() => {
             '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || (hasGain?'Вариант выбран по суммарной оценке профиля.':'Все проверенные изменения оценены не выше текущего кадра; можно посмотреть ближайшие эксперименты.'))+'</div>'+
             '<div class="iaMuted" style="margin-top:8px;font-weight:600">Три лучших варианта:</div>'+alternatives+
             '<div class="iaActions"><button id="btnImproveReject">Закрыть</button></div>';
+          // Живой пересчёт итога при смене галочек: показываем балл выбранного набора и нарушение замысла.
+          const refreshSel=(i)=>{
+            const parts=chosenParts(i);
+            const info=el.improveBox.querySelector('.iaSel[data-variant="'+i+'"]');
+            const full=el.improveBox.querySelector('.iaTry[data-variant="'+i+'"][data-fraction="1"]');
+            const choice=result.alternatives?.[i]?.candidate;
+            if(!info||!full||!choice||!parts) return;
+            if(!parts.length){ info.textContent='Ничего не выбрано'; info.classList.remove('bad'); full.disabled=true; return; }
+            const pv=ImproveEngine.previewParts(result,choice,parts,profile,1);
+            if(!pv){ return; }
+            full.disabled=!pv.ok;
+            info.classList.toggle('bad',!pv.ok);
+            info.textContent=pv.ok
+              ?'Выбранное: '+Math.round(pv.total*100)+'% ('+(pv.deltaScore>=0?'+':'')+Math.round(pv.deltaScore*100)+' п.п.)'
+              :'Выбранное нарушает замысел: '+reasonText(pv);
+          };
+          el.improveBox.querySelectorAll('.iaPart').forEach(cb=>cb.addEventListener('change',()=>refreshSel(Number(cb.dataset.variant))));
           el.improveBox.querySelectorAll('.iaTry').forEach(btn=>{
             btn.onclick=()=>{
-              const choice=result.alternatives?.[Number(btn.dataset.variant)]?.candidate;
+              const i=Number(btn.dataset.variant);
+              const choice=result.alternatives?.[i]?.candidate;
               if(!choice){toast('Вариант недоступен. Пересчитай улучшение.');return;}
               const chosen={...result,changed:true,best:choice};
               const fraction=Number(btn.dataset.fraction||1);
-              const applied=ImproveEngine.apply(chosen,fraction);
+              const parts=chosenParts(i);
+              if(parts&&!parts.length){toast('Отметь хотя бы один параметр.');return;}
+              // Заранее объясняем, почему нельзя (иначе «не применилось» выглядело бы как устаревшее предложение).
+              const pv=ImproveEngine.previewParts(chosen,choice,parts,profile,fraction);
+              if(pv&&!pv.ok){toast('Нельзя применить: '+reasonText(pv));return;}
+              const applied=ImproveEngine.apply(chosen,fraction,parts);
               if(!applied){toast('Кадр изменился. Построй предложение заново.');return;}
               el.improveBox.style.display='none';
               refreshCameraUI();
@@ -6735,6 +6812,16 @@ function runTests(){
     ok('Охрана: потеря перекрытия — нарушение',IT.graphViolations(ov,IT.relationGraph([RR('a',0,.2,.3,.6,3),RR('b',.5,.7,.3,.6,5)])).some(v=>v.type==='overlap-lost'));
     ok('Охрана: описание правки без изменений',IT.describeChange(fa,fa)==='без изменений');
 
+    // Частичное применение: разбор на параметры и слияние выбранных.
+    const pa={camera:{pos:[0,0,0],target:[0,0,-5],yaw:0,pitch:0,roll:0},lens:{focalMm:50}};
+    const pb={camera:{pos:[0.1,0,0],target:[0,0,-5],yaw:-3,pitch:0,roll:1},lens:{focalMm:55}};
+    ok('Части: перечислены ровно изменённые параметры',IT.partTexts(pa,pb).map(x=>x.id).join()==='pos,yaw,roll,focal');
+    const pm=IT.mergeParts(pa,pb,['yaw']);
+    ok('Части: слияние [yaw] берёт только yaw',pm.camera.yaw===-3&&pm.camera.pos[0]===0&&pm.camera.roll===0&&pm.lens.focalMm===50);
+    ok('Части: слияние всех изменённых == вариант',JSON.stringify(IT.mergeParts(pa,pb,['pos','yaw','roll','focal']))===JSON.stringify(pb));
+    ok('Части: слияние пустого набора == исходный',JSON.stringify(IT.mergeParts(pa,pb,[]))===JSON.stringify(pa));
+    ok('Части: слияние не мутирует вход',pa.camera.yaw===0&&pb.camera.yaw===-3);
+
     try{
       for(const strength of ['soft','medium','strong']){
         const result=ImproveEngine.improve(source,'classic',{strength});
@@ -6751,6 +6838,18 @@ function runTests(){
         if(result.changed){
           const half=IT.blendFrame(source,result.best.frame,0.5);
           ok('ImproveEngine['+strength+']: половина шага тоже в пределах лимитов',IT.withinLimits(IT.frameDeviation(source,half),lim));
+          // Любое подмножество параметров лучшего варианта: в лимитах, а предпросмотр совпадает с прямой проверкой графа.
+          const pids=IT.partTexts(source,result.best.frame).map(x=>x.id);
+          let subsetsOk=true,previewOk=true;
+          for(let mask=1;mask<(1<<pids.length);mask++){
+            const parts=pids.filter((_,k)=>mask&(1<<k));
+            const pv=ImproveEngine.previewParts(result,result.best,parts,'classic',1);
+            if(!pv||!pv.within) subsetsOk=false;
+            const direct=IT.graphViolations(g,IT.relationGraph(Evaluator.screenItems(IT.mergeParts(source,result.best.frame,parts)))).length===0;
+            if(pv&&pv.ok!==direct) previewOk=false;
+          }
+          ok('ImproveEngine['+strength+']: любое подмножество параметров в пределах лимитов',subsetsOk);
+          ok('ImproveEngine['+strength+']: предпросмотр частей совпадает с проверкой графа',previewOk);
         }
       }
       const blend=IT.blendFrame({camera:{pos:[0,0,0],target:[0,0,0],yaw:0,pitch:0,roll:0},lens:{focalMm:50}},{camera:{pos:[2,0,0],target:[0,0,0],yaw:10,pitch:0,roll:0},lens:{focalMm:70}},0.5);
