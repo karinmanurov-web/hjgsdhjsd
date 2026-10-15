@@ -56,3 +56,13 @@ Target branch: `67pocoyo`, file: `deepseek_html_20261008_fbe883.html`.
 - Проверки: Node — все подмножества параметров всех предложений (97 + 54 половины шага) совпадают с прямой проверкой
   графа, плюс фиксированная сцена-контрпример; в раннере приложения — разбор/слияние частей и подмножества лучшего
   варианта. **В браузере не запускались.**
+
+## Follow-up: ghost «было/стало» (Improve panel)
+
+The ghost itself was already in the repo (commits `0a1ef16`, `0ca75b7`). Changes on top:
+
+- **Letterbox bug fixed.** Arrow coordinates (u,v) are relative to the frame rect, but were mapped onto the whole renderer canvas including the black bars, so arrows were off (e.g. v=0.2 → 120 px instead of 165 px on 800×600 with a 800×450 rect). The ghost canvas is now cropped to `rect` for both layers.
+- **Follows the checkboxes.** The ghost redraws on every `.iaPart` toggle for the shown variant; unchecked parts show the original with no arrows.
+- **Arrows for all objects**, main object emphasised («было»/«стало» labels); an object that leaves the frame gets a red «ушёл из кадра» marker, and the caption flags design-guard violations.
+- **Schematic fallback** (640 px, height from `frame.aspect`, default 16:9) when the frame preview is not open.
+- Pure logic `ImproveEngine.ghostMoves` + in-app tests; Node harness covers picture/schematic modes. Not yet run in a real browser.
