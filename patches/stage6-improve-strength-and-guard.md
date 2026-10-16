@@ -66,3 +66,12 @@ The ghost itself was already in the repo (commits `0a1ef16`, `0ca75b7`). Changes
 - **Arrows for all objects**, main object emphasised («было»/«стало» labels); an object that leaves the frame gets a red «ушёл из кадра» marker, and the caption flags design-guard violations.
 - **Schematic fallback** (640 px, height from `frame.aspect`, default 16:9) when the frame preview is not open.
 - Pure logic `ImproveEngine.ghostMoves` + in-app tests; Node harness covers picture/schematic modes. Not yet run in a real browser.
+
+## Follow-up: object edits in Improve with anchors (TZ 10.1)
+
+- «Улучшить» may now shift an object in the frame plane (right/left/up/down, full and half step) and scale it (±, full and half step). **Anchors (⚓), locked objects and guides are never touched**: they get no limit entry, so `withinLimits` rejects any frame that moves them, even a forged one.
+- Limits scale with strength: shift = 3/5/8 % of frame width at the object's depth, scale = ±4/7/10 %. Measured from the original frame, like the camera limits. Deviation cost D gets a seventh term (the most-stretched object).
+- Scaling keeps the object's bottom in place (centre rises by half of the height growth), so objects do not sink into the floor.
+- Object changes are separate checkboxes in the variant (`obj:<id>`), join partial apply, half step and the guard re-check. `apply` writes into the live objects of the current frame (the current frame has no overrides) and refuses a stale suggestion if the scene was edited by hand.
+- Project field `improveObjects` (default true) + checkbox «Двигать и масштабировать объекты»; the result panel lists protected objects («Не трогаю: …»).
+- Tested in Node with a synthetic pinhole scene (anchor, lock, guide, movable main/background): limits, no forbidden overrides, guard, partial apply (camera untouched), half step, `objects:false`. Not yet run in a real browser.

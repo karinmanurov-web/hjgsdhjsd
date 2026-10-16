@@ -410,6 +410,9 @@
           </select>
         </div>
         <div class="row">
+          <label title="Якоря (⚓) и заблокированные объекты не двигаются никогда"><input type="checkbox" id="improveObjectsChk"> Двигать и масштабировать объекты</label>
+        </div>
+        <div class="row">
           <button id="btnReeval">Пересчитать</button>
           <button id="btnImprove" class="on">✦ Улучшить</button>
           <button id="btnEvalAuto" class="on">Авто</button>
@@ -738,6 +741,7 @@ const State = (() => {
     grids: defaultGrids(),
     evalProfile: 'classic',
     improveStrength: 'medium',                   // «Улучшить»: soft | medium | strong
+    improveObjects: true,                        // «Улучшить» может двигать/масштабировать объекты (кроме якорей и замков)
     groups: [],                                  // [{id,name,collapsed}]; у объекта — groupId
     freeProfile: { enabled: {}, weights: {} },   // профиль «Свободный»; недостающие id добивает EvaluatorV2.normalizeFree
     evalAuto: true
@@ -868,6 +872,7 @@ const State = (() => {
     if(project.cvd === undefined) project.cvd = 'none';
     if(!project.evalProfile) project.evalProfile = 'classic';
     if(!['soft','medium','strong'].includes(project.improveStrength)) project.improveStrength = 'medium';
+    if(typeof project.improveObjects !== 'boolean') project.improveObjects = true;
     if(!Array.isArray(project.groups)) project.groups = [];
     if(!project.freeProfile || typeof project.freeProfile !== 'object') project.freeProfile = { enabled:{}, weights:{} };
     if(!project.freeProfile.enabled) project.freeProfile.enabled = {};
@@ -3477,6 +3482,50 @@ const ImproveEngine = (() => {
     return {angle:s.angle,pos:s.pos*d,target:s.pos*d,focal:s.focal,lambda:s.lambda};
   }
   const angDelta=(a,b)=>(((b-a)%360)+540)%360-180;               // кратчайшая знаковая разница углов
+  /* ---- Правки объектов (ТЗ 10.1): сдвиг в плоскости кадра и масштаб; якоря и замки не трогаем ---- */
+  const OBJ_STRENGTH={soft:{pos:0.03,scale:0.04},medium:{pos:0.05,scale:0.07},strong:{pos:0.08,scale:0.10}};
+  const FRAME_W_PER_DIST=0.72;                                   // ширина кадра ≈ 0.72·дистанция (36 мм / 50 мм)
+  const sceneObjects=()=>{ try{ return State.get().objects||[]; }catch(_){ return []; } };
+  const effTransform=(frame,o)=>({...(o.transform||{}),...(frame?.overrides?.[o.id]?.transform||{})});
+  function isMovable(frame,o){
+    const ov=frame?.overrides?.[o.id]||{};
+    const vis=ov.visible!==undefined?ov.visible:o.visible;
+    return vis!==false&&o.role!=='guide'&&!o.locked&&!o.anchor;
+  }
+  // Пределы правок объектов: сдвиг в метрах (доля ширины кадра на глубине объекта) и доля масштаба.
+  function objectLimits(frame,strength){
+    const s=OBJ_STRENGTH[strength]||OBJ_STRENGTH.medium,cam=frame.camera?.pos||[0,0,0],out={};
+    for(const o of sceneObjects()){
+      if(!isMovable(frame,o)) continue;
+      const d=Math.max(1,dist3(cam,effTransform(frame,o).pos||[0,0,0]));
+      out[o.id]={pos:s.pos*FRAME_W_PER_DIST*d,scale:s.scale};
+    }
+    return out;
+  }
+  // Оси «в плоскости кадра» из камеры: вправо и вверх (мир: Y вверх). Крен игнорируем — он мал.
+  function planeBasis(frame){
+    const p=frame.camera?.pos||[0,0,0],t=frame.camera?.target||[0,0,-1];
+    const fw=[t[0]-p[0],t[1]-p[1],t[2]-p[2]],n=Math.hypot(...fw);
+    if(!(n>1e-6)) return null;
+    fw[0]/=n;fw[1]/=n;fw[2]/=n;
+    let r=[fw[1]*0-fw[2]*1,fw[2]*0-fw[0]*0,fw[0]*1-fw[1]*0];   // fw × (0,1,0)
+    let rn=Math.hypot(...r); r=rn>1e-6?r.map(v=>v/rn):[1,0,0];
+    const u=[r[1]*fw[2]-r[2]*fw[1],r[2]*fw[0]-r[0]*fw[2],r[0]*fw[1]-r[1]*fw[0]]; // r × fw
+    const un=Math.hypot(...u)||1;
+    return {right:r,up:u.map(v=>v/un)};
+  }
+  function objectDeviation(f0,f1){
+    const out={};
+    for(const o of sceneObjects()){
+      const a=effTransform(f0,o),b=effTransform(f1,o);
+      const dp=dist3(a.pos||[0,0,0],b.pos||[0,0,0]);
+      const sa=a.scale||[1,1,1],sb=b.scale||[1,1,1];
+      let ds=0;
+      for(let i=0;i<3;i++){ const x=sa[i]??1,y=sb[i]??1; ds=Math.max(ds,x>0?Math.abs(y/x-1):(y===x?0:Infinity)); }
+      if(dp>1e-9||ds>1e-9) out[o.id]={pos:dp,scale:ds};
+    }
+    return out;
+  }
   const dist3=(a,b)=>Math.hypot((a[0]||0)-(b[0]||0),(a[1]||0)-(b[1]||0),(a[2]||0)-(b[2]||0));
   // Насколько кадр f1 ушёл от исходного f0 (всегда считаем от исходного, а не от предыдущего шага).
   function frameDeviation(f0,f1){
@@ -3487,17 +3536,28 @@ const ImproveEngine = (() => {
       yaw:Math.abs(angDelta(f0.camera.yaw,f1.camera.yaw)),
       pitch:Math.abs(f1.camera.pitch-f0.camera.pitch),
       roll:Math.abs(f1.camera.roll-f0.camera.roll),
-      focal:(Number.isFinite(fl0)&&fl0>0&&Number.isFinite(fl1))?Math.abs(fl1/fl0-1):Infinity
+      focal:(Number.isFinite(fl0)&&fl0>0&&Number.isFinite(fl1))?Math.abs(fl1/fl0-1):Infinity,
+      objs:objectDeviation(f0,f1)
     };
   }
   function withinLimits(dev,lim){
     const e=1e-9;
-    return dev.pos<=lim.pos+e&&dev.target<=lim.target+e&&dev.yaw<=lim.angle+e&&
-           dev.pitch<=lim.angle+e&&dev.roll<=lim.angle+e&&dev.focal<=lim.focal+e;
+    if(!(dev.pos<=lim.pos+e&&dev.target<=lim.target+e&&dev.yaw<=lim.angle+e&&
+         dev.pitch<=lim.angle+e&&dev.roll<=lim.angle+e&&dev.focal<=lim.focal+e)) return false;
+    for(const id of Object.keys(dev.objs||{})){                 // объект без лимита (якорь/замок/скрыт) трогать нельзя
+      const l=lim.objects?.[id],d=dev.objs[id];
+      if(!l||!(d.pos<=l.pos+e&&d.scale<=l.scale+e)) return false;
+    }
+    return true;
   }
   // D из ТЗ: средняя доля израсходованного бюджета по шести параметрам (0 — не тронуто, 1 — все на пределе).
   function deviationCost(dev,lim){
-    return (dev.pos/lim.pos+dev.target/lim.target+dev.yaw/lim.angle+dev.pitch/lim.angle+dev.roll/lim.angle+dev.focal/lim.focal)/6;
+    let objTerm=0;                                              // самый «растянутый» объект
+    for(const id of Object.keys(dev.objs||{})){
+      const l=lim.objects?.[id],d=dev.objs[id];
+      objTerm=Math.max(objTerm,l?Math.max(d.pos/l.pos,d.scale/l.scale):1);
+    }
+    return (dev.pos/lim.pos+dev.target/lim.target+dev.yaw/lim.angle+dev.pitch/lim.angle+dev.roll/lim.angle+dev.focal/lim.focal+objTerm)/6;
   }
   // Граф отношений кадра: порядок слева-направо и сверху-вниз, порядок по размеру, перекрытия (кто спереди),
   // направление взгляда. Зона нечувствительности (EPS) не даёт «мерцать» почти равным парам.
@@ -3558,6 +3618,14 @@ const ImproveEngine = (() => {
     if(Math.abs(dp)>0.05) parts.push({id:'pitch',text:'pitch '+sg(dp)});
     if(Math.abs(dr)>0.05) parts.push({id:'roll',text:'roll '+sg(dr)});
     if(Number.isFinite(dev.focal)&&dev.focal>1e-4) parts.push({id:'focal',text:'фокусное '+f0.lens.focalMm.toFixed(1)+' → '+f1.lens.focalMm.toFixed(1)+' мм'});
+    for(const o of sceneObjects()){
+      const d=dev.objs?.[o.id]; if(!d) continue;
+      const bits=[];
+      if(d.pos>1e-6) bits.push('сдвинут на '+d.pos.toFixed(2)+' м');
+      if(d.scale>1e-6){ const a=effTransform(f0,o).scale||[1,1,1],b=effTransform(f1,o).scale||[1,1,1];
+        const k=(b[0]/(a[0]||1)-1)*100; bits.push('масштаб '+(k>0?'+':'')+k.toFixed(1)+'%'); }
+      parts.push({id:'obj:'+o.id,text:'«'+(o.name||o.id)+'» '+bits.join(', ')});
+    }
     return parts;
   }
   // Человеческое описание правки (для панели «Улучшить»).
@@ -3574,6 +3642,12 @@ const ImproveEngine = (() => {
     if(has('pitch')) out.camera.pitch=f1.camera.pitch;
     if(has('roll')) out.camera.roll=f1.camera.roll;
     if(has('focal')) out.lens.focalMm=f1.lens.focalMm;
+    for(const o of sceneObjects()){
+      if(!has('obj:'+o.id)) continue;
+      const t1=effTransform(f1,o);
+      out.overrides=out.overrides||{};
+      out.overrides[o.id]={...out.overrides[o.id],transform:{...effTransform(out,o),pos:[...(t1.pos||[0,0,0])],scale:[...(t1.scale||[1,1,1])]}};
+    }
     return out;
   }
   const VIOLATION_TEXT={lost:'объект вышел из кадра',facing:'сменилось направление взгляда','order-h':'поменялся порядок слева-направо',
@@ -3642,9 +3716,34 @@ const ImproveEngine = (() => {
       const factor=1+sg*k*lim.focal;
       add('Фокусное ×'+factor.toFixed(3),f=>{f.lens.focalMm=clamp(f.lens.focalMm*factor,14,300);},'lens',{axis:'focalMm',factor});
     }));
+    // Правки объектов: сдвиг в плоскости кадра (4 направления) и масштаб — только для не-якорей и не-замков.
+    if(lim.objects){
+      const basis=planeBasis(f0);
+      const setObj=(f,o,pos,scale)=>{
+        f.overrides=f.overrides||{};
+        f.overrides[o.id]={...f.overrides[o.id],transform:{...effTransform(f,o),pos,scale}};
+      };
+      for(const o of sceneObjects()){
+        const L=lim.objects[o.id]; if(!L||!isMovable(f0,o)) continue;
+        const t0=effTransform(f0,o),p0=t0.pos||[0,0,0],s0=t0.scale||[1,1,1],nm='«'+(o.name||o.id)+'»';
+        if(basis) [1,0.5].forEach(k=>[['вправо',basis.right,1],['влево',basis.right,-1],['вверх',basis.up,1],['вниз',basis.up,-1]].forEach(([dn,ax,sg])=>{
+          const m=sg*k*L.pos;
+          add(nm+' '+dn+' на '+round(Math.abs(m),2)+' м',f=>setObj(f,o,[p0[0]+ax[0]*m,p0[1]+ax[1]*m,p0[2]+ax[2]*m],[...s0]),'object',{id:o.id,axis:dn,value:m});
+        }));
+        [1,0.5].forEach(k=>[1,-1].forEach(sg=>{
+          const factor=1+sg*k*L.scale;
+          add(nm+' масштаб ×'+factor.toFixed(3),f=>{
+            let dy=0;                                            // низ объекта остаётся на месте (не проваливается в пол)
+            try{ const sz=AnalyzerLite.guessObjectSize(o); if(sz&&Number.isFinite(sz.y)) dy=(s0[1]*factor-s0[1])*sz.y/2; }catch(_){}
+            setObj(f,o,[p0[0],p0[1]+dy,p0[2]],s0.map(v=>v*factor));
+          },'object',{id:o.id,axis:'scale',factor});
+        }));
+      }
+    }
     return dedupe(out);
   }
-  const frameKey=f=>[...f.camera.pos,...f.camera.target,f.camera.yaw,f.camera.pitch,f.camera.roll,f.lens.focalMm].map(v=>round(v,4)).join('|');
+  const objKey=f=>Object.keys(f.overrides||{}).sort().map(id=>{const t=f.overrides[id]?.transform;return t?id+':'+(t.pos||[]).map(v=>round(v,4))+':'+(t.scale||[]).map(v=>round(v,4)):'';}).join(';');
+  const frameKey=f=>[...f.camera.pos,...f.camera.target,f.camera.yaw,f.camera.pitch,f.camera.roll,f.lens.focalMm].map(v=>round(v,4)).join('|')+'#'+objKey(f);
   function dedupe(list){
     const seen=new Set();
     return list.filter(c=>{const key=frameKey(c.frame);if(seen.has(key))return false;seen.add(key);return true;});
@@ -3667,6 +3766,7 @@ const ImproveEngine = (() => {
     const t0=now();
     const beforeFrame=cloneFrame(frame);
     const lim=strengthLimits(strength,contextDistance(beforeFrame));
+    lim.objects=opts.objects===false?{}:objectLimits(beforeFrame,strength);
     const g0=relationGraph(Evaluator.screenItems(beforeFrame));
     const base=score(beforeFrame,profile);
     const ranked=[],trail=[],rejected={limit:0,design:0,reasons:{}};
@@ -3713,7 +3813,10 @@ const ImproveEngine = (() => {
       weakCriterion:weak?{name:weak.name||weak.label||'Критерий',score:weak.s,act:weak.act||''}:null,
       alternatives:ranked.slice(0,3).map(c=>({label:c.label,kind:c.kind,total:c.total,deltaScore:c.deltaScore,candidate:c})),
       sourceFrameId:frame.id,
+      objectsEnabled:opts.objects!==false,
+      protectedObjects:sceneObjects().filter(o=>o.role!=='guide'&&(o.locked||o.anchor)).map(o=>(o.anchor?'⚓ ':'🔒 ')+(o.name||o.id)),
       _test:{
+        baselineObjects:objectsSnapshot(),
         originalUnchanged:JSON.stringify(frame)===JSON.stringify(beforeFrame),
         baselineCamera:JSON.stringify(beforeFrame.camera),
         baselineLens:JSON.stringify(beforeFrame.lens)
@@ -3721,11 +3824,25 @@ const ImproveEngine = (() => {
     };
   }
 
+  // Положение и масштаб объектов — чтобы отличить «кадр устарел» после ручной правки сцены.
+  function objectsSnapshot(){
+    return JSON.stringify(sceneObjects().map(o=>[o.id,o.transform?.pos,o.transform?.scale]));
+  }
+  // Правки объектов из next переносим в overrides результата (с долей шага t).
+  function blendObjects(out,current,next,t){
+    for(const o of sceneObjects()){
+      const nt=next.overrides?.[o.id]?.transform; if(!nt) continue;
+      const ct=effTransform(current,o);
+      const mix=(a,b)=>(b||a||[]).map((v,i)=>{const x=(a||[])[i];return Number.isFinite(x)&&Number.isFinite(v)?x+(v-x)*t:v;});
+      out.overrides=out.overrides||{};
+      out.overrides[o.id]={...out.overrides[o.id],transform:{...ct,pos:mix(ct.pos||[0,0,0],nt.pos),scale:mix(ct.scale||[1,1,1],nt.scale)}};
+    }
+  }
   function blendFrame(current, next, fraction=1){
     const t=clamp(Number.isFinite(fraction)?fraction:1,0,1);
     const lerp=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)?a+(b-a)*t:b;
     const out=cloneFrame(current);
-    if(t>=1){ out.camera=cloneFrame(next.camera); out.lens=cloneFrame(next.lens); return out; }
+    if(t>=1){ out.camera=cloneFrame(next.camera); out.lens=cloneFrame(next.lens); blendObjects(out,current,next,1); return out; }
     out.camera={...out.camera,...next.camera,
       pos:out.camera.pos.map((v,i)=>lerp(v,next.camera.pos[i])),
       target:out.camera.target.map((v,i)=>lerp(v,next.camera.target[i])),
@@ -3733,6 +3850,7 @@ const ImproveEngine = (() => {
       pitch:lerp(out.camera.pitch,next.camera.pitch),
       roll:lerp(out.camera.roll,next.camera.roll)};
     out.lens={...out.lens,...next.lens,focalMm:lerp(out.lens.focalMm,next.lens.focalMm)};
+    blendObjects(out,current,next,t);
     return out;
   }
 
@@ -3740,7 +3858,7 @@ const ImproveEngine = (() => {
   function previewParts(result,candidate,parts,profile,fraction=1){
     const origin=result?.origin;
     if(!origin||!candidate?.frame) return null;
-    const merged=mergeParts(origin,candidate.frame,parts||PART_IDS);
+    const merged=mergeParts(origin,candidate.frame,parts||partTexts(origin,candidate.frame).map(p=>p.id));
     const frame=blendFrame(origin,merged,fraction);
     const within=withinLimits(frameDeviation(origin,frame),result.limits);
     const violations=graphViolations(relationGraph(Evaluator.screenItems(origin)),relationGraph(Evaluator.screenItems(frame)));
@@ -3758,6 +3876,7 @@ const ImproveEngine = (() => {
     if(result.sourceFrameId && current.id!==result.sourceFrameId) return false;
     if(result._test?.baselineCamera && JSON.stringify(current.camera)!==result._test.baselineCamera) return false;
     if(result._test?.baselineLens && JSON.stringify(current.lens)!==result._test.baselineLens) return false;
+    if(result._test?.baselineObjects && objectsSnapshot()!==result._test.baselineObjects) return false;
     const chosen=parts?mergeParts(current,result.best.frame,parts):result.best.frame;
     const next=blendFrame(current,chosen,fraction);
     if(result.origin&&result.limits){
@@ -3768,6 +3887,11 @@ const ImproveEngine = (() => {
     State.History.tx(()=>{
       current.camera=JSON.parse(JSON.stringify(next.camera));
       current.lens=JSON.parse(JSON.stringify(next.lens));
+      for(const o of sceneObjects()){                       // правки объектов уходят в живые объекты текущего кадра
+        const nt=next.overrides?.[o.id]?.transform;
+        if(!nt||!isMovable(current,o)) continue;
+        o.transform={...o.transform,pos:[...(nt.pos||o.transform.pos)],scale:[...(nt.scale||o.transform.scale)]};
+      }
     });
     State.save();
     return true;
@@ -3775,7 +3899,7 @@ const ImproveEngine = (() => {
 
   return {improve,apply,previewParts,strengths:STRENGTHS,describeChange,partTexts,violationText:VIOLATION_TEXT,
     ghostMoves,mainId:f=>mainObject(f)?.id||null,
-    _test:{ghostMoves,candidates,score,blendFrame,strengthLimits,frameDeviation,withinLimits,deviationCost,relationGraph,graphViolations,describeChange,partTexts,mergeParts,angDelta}};
+    _test:{objectLimits,planeBasis,isMovable,objectDeviation,ghostMoves,candidates,score,blendFrame,strengthLimits,frameDeviation,withinLimits,deviationCost,relationGraph,graphViolations,describeChange,partTexts,mergeParts,angDelta}};
 })();
 
 /* ============================================================
@@ -3860,6 +3984,7 @@ const UI = (() => {
       evalProfileSel: document.getElementById('evalProfileSel'),
       freeBox: document.getElementById('freeBox'),
       improveStrengthSel: document.getElementById('improveStrengthSel'),
+      improveObjectsChk: document.getElementById('improveObjectsChk'),
       freeList: document.getElementById('freeList'),
       btnFreeAll: document.getElementById('btnFreeAll'),
       btnFreeNone: document.getElementById('btnFreeNone'),
@@ -4192,6 +4317,11 @@ const UI = (() => {
       State.History.tx(() => { State.get().improveStrength = el.improveStrengthSel.value; });
       State.save();
     });
+    el.improveObjectsChk.checked = State.get().improveObjects !== false;
+    el.improveObjectsChk.addEventListener('change', () => {
+      State.History.tx(() => { State.get().improveObjects = el.improveObjectsChk.checked; });
+      State.save();
+    });
     const freeBulk = (fn) => {
       State.History.tx(() => {
         const p = State.get();
@@ -4224,7 +4354,7 @@ const UI = (() => {
       requestAnimationFrame(() => {
         try{
           const strength=State.get().improveStrength||'medium';
-          const result=ImproveEngine.improve(frame,profile,{strength});
+          const result=ImproveEngine.improve(frame,profile,{strength,objects:State.get().improveObjects!==false});
           const b=Math.round(result.before.total*100);
           const weak=result.weakCriterion;
           const hasGain=result.changed && result.best;
@@ -4254,6 +4384,7 @@ const UI = (() => {
             '<div class="iaMuted" style="margin-top:4px">Лимиты: углы ±'+result.limits.angle+'°, камера ±'+result.limits.pos.toFixed(2)+' м, фокусное ±'+Math.round(result.limits.focal*100)+'%.'+
               (result.rejected.design?' Охрана замысла отклонила '+result.rejected.design+' (напр.: '+escapeHtml(Object.keys(result.rejected.reasons).slice(0,2).map(k=>ImproveEngine.violationText[k]||k).join(', '))+').':'')+
               (result.truncated?' Поиск остановлен по времени.':'')+'</div>'+
+            (result.objectsEnabled?(result.protectedObjects.length?'<div class="iaMuted" style="margin-top:4px">Не трогаю: '+result.protectedObjects.map(escapeHtml).join(', ')+'</div>':''):'<div class="iaMuted" style="margin-top:4px">Правки объектов выключены — двигается только камера.</div>')+
             '<div class="iaGrid"><div class="iaCell"><div class="iaMuted">Сейчас</div><div class="iaScore">'+b+'%</div></div>'+
             '<div class="iaCell"><div class="iaMuted">'+(hasGain?'Лучший результат':'Лучший эксперимент')+'</div><div class="iaScore">'+Math.round((result.alternatives?.[0]?.total??result.before.total)*100)+'%</div></div></div>'+
             '<div class="iaMuted" style="margin-top:6px">'+escapeHtml(weak?.act || (hasGain?'Вариант выбран по суммарной оценке профиля.':'Все проверенные изменения оценены не выше текущего кадра; можно посмотреть ближайшие эксперименты.'))+'</div>'+
@@ -4528,6 +4659,7 @@ const UI = (() => {
     updateFrameMeta();
     el.evalProfileSel.value = State.get().evalProfile || 'classic';
     el.improveStrengthSel.value = State.get().improveStrength || 'medium';
+    el.improveObjectsChk.checked = State.get().improveObjects !== false;
     buildFreeProfilePanel();
     el.btnEvalAuto.classList.toggle('on', !!State.get().evalAuto);
     runEvaluationNow();
@@ -6930,6 +7062,16 @@ function runTests(){
     ok('ImproveEngine: нет повторяющихся вариантов',unique.size===pool.length);
 
     // Чистая логика: лимиты, отклонение, граф отношений.
+    // Правки объектов (ТЗ 10.1): якоря и замки неприкосновенны, лимиты считаются от исходного кадра.
+    {
+      const mk=(id,extra)=>({id,name:id,role:'secondary',transform:{pos:[0,0,-5],scale:[1,1,1]},...extra});
+      const fr={camera:{pos:[0,0,0],target:[0,0,-5]},overrides:{}};
+      ok('Объекты: якорь, замок и guide не двигаются',!IT.isMovable(fr,mk('x',{anchor:true}))&&!IT.isMovable(fr,mk('x',{locked:true}))&&!IT.isMovable(fr,mk('x',{role:'guide'}))&&IT.isMovable(fr,mk('x')));
+      const bs=IT.planeBasis(fr);
+      ok('Объекты: оси плоскости кадра для взгляда по −Z — вправо +X, вверх +Y',bs&&Math.abs(bs.right[0]-1)<1e-9&&Math.abs(bs.up[1]-1)<1e-9);
+      const f1=JSON.parse(JSON.stringify(fr));
+      ok('Объекты: отклонение пустых правок — пусто',Object.keys(IT.objectDeviation(fr,f1)).length===0);
+    }
     // «Было/стало»: ghostMoves — чистая логика стрелок.
     {
       const gb=[{id:'a',u0:0.1,u1:0.3,v0:0.2,v1:0.4},{id:'b',u0:0.5,u1:0.7,v0:0.5,v1:0.7}];
