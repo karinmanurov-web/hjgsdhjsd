@@ -1669,6 +1669,27 @@ const SceneManager = (() => {
       applyColor(data, frame);
     }
   }
+  // Выполнить fn, пока объекты показаны в состоянии кадра frame (с его overrides), и вернуть сцену как была.
+  // Нужен для рендера и карты внимания кандидатов «Улучшить»: у них правки объектов лежат только в overrides.
+  function withFrameState(frame, fn){
+    if(!frame || !frame.overrides || !Object.keys(frame.overrides).length) return fn();
+    const snap = [];
+    for(const [, g] of objectMap){
+      const m = g.userData.mesh?.material;
+      snap.push({ g, p:g.position.clone(), r:g.rotation.clone(), s:g.scale.clone(), v:g.visible, m, c:(m && m.color) ? m.color.clone() : null });
+    }
+    try{
+      applyFrameState(frame);
+      rootGroup.updateMatrixWorld(true);
+      return fn();
+    } finally {
+      for(const x of snap){
+        x.g.position.copy(x.p); x.g.rotation.copy(x.r); x.g.scale.copy(x.s); x.g.visible = x.v;
+        if(x.m && x.c) x.m.color.copy(x.c);
+      }
+      rootGroup.updateMatrixWorld(true);
+    }
+  }
   function rebuildOne(id, frame){
     const data = objectData.get(id); if(!data) return;
     const old = objectMap.get(id);
@@ -1903,7 +1924,7 @@ const SceneManager = (() => {
     updateParamsFromData, rebuild, rebuildOne, applyFrameState, fitView, resetView, setEditorViewPreset,
     updateShotCamViz, readCamGroupToShot,
     setSceneRotation, getSceneRotation, applySceneRotationFromState,
-    setEditorMode, getEditorMode, setHost,
+    setEditorMode, getEditorMode, setHost, withFrameState,
     getRenderInfo(){
       return { objectMap, rootGroup, editorCamera, orbit, renderer, scene };
     }
@@ -2121,6 +2142,9 @@ const FrameRenderer = (() => {
   // Рендерим именно rootGroup: без редакторской сетки, осей, гизмо и пирамиды камеры.
   // Viewport/scissor задаются в логических CSS-пикселях, как требует WebGLRenderer.
   function renderFrame(frame){
+    return SceneManager.withFrameState(frame, () => renderFrameNow(frame));
+  }
+  function renderFrameNow(frame){
     if(!renderer || !hostEl) return null;
 
     resizeToHost();
@@ -2426,7 +2450,25 @@ const GridOverlay = (() => {
       ctx.beginPath(); ctx.moveTo(fx, yH); ctx.lineTo(fx + fw, yH); ctx.stroke();
       ctx.restore();
     }
-    if(eo.heatmapData){
+    if(eo.saliencyMap && eo.saliencyMap.map && eo.saliencyMap.W > 1 && eo.saliencyMap.H > 1){
+      // Вся карта внимания как тепловое изображение: прозрачно → жёлтый → красный.
+      const { map, W: mw, H: mh } = eo.saliencyMap;
+      let mx = 0; for(let i=0;i<map.length;i++) if(map[i] > mx) mx = map[i];
+      if(mx > 0){
+        const hc = document.createElement('canvas'); hc.width = mw; hc.height = mh;
+        const hx = hc.getContext('2d'), id = hx.createImageData(mw, mh);
+        for(let i=0;i<map.length;i++){
+          const t = Math.min(1, map[i] / mx), q = i * 4;
+          id.data[q] = 255; id.data[q+1] = Math.round(220 * (1 - t)); id.data[q+2] = 40;
+          id.data[q+3] = Math.round(190 * Math.pow(t, 0.8));
+        }
+        hx.putImageData(id, 0, 0);
+        ctx.save();
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(hc, fx, fy, fw, fh);
+        ctx.restore();
+      }
+    } else if(eo.heatmapData){
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
       for(const h of eo.heatmapData){
@@ -2715,6 +2757,11 @@ const FFT = (() => {
   // Spectral residual: серое изображение → карта saliency.
   // gray — Float32Array длины W*H со значениями 0..1.
   function spectralResidual(gray, W, H){
+    // Плоская картинка (пустой кадр, одна заливка) не содержит ничего заметного. Без этой проверки остаток
+    // спектра нулевой, фаза нулевая, и обратное БПФ даёт ложный пик в левом верхнем углу.
+    let lo = Infinity, hi = -Infinity;
+    for(let i=0;i<gray.length;i++){ const v = gray[i]; if(v < lo) lo = v; if(v > hi) hi = v; }
+    if(!(hi - lo > 1e-4)) return new Float32Array(gray.length);
     const real = new Float32Array(gray);
     const imag = new Float32Array(gray.length);
     fft2d(real, imag, W, H, false);
@@ -2891,14 +2938,18 @@ const Evaluator = (() => {
 
     return { map: sal, W: W2, H: H2, centroid, heatDataForOverlay };
   }
+  // Карта внимания размыта (≈3 клетки на карте 64×32), поэтому часть массы объекта «вытекает» за его рамку.
+  // Считаем долю внутри рамки, расширенной на ширину размытия; иначе одиночный объект получал фокус около 0.
+  const FOCUS_PAD = { u: 0.05, v: 0.09 };
   function s_focus(saliency, mainObjBBox){
     if(!mainObjBBox) return { s: 0.5, why: 'Нет главного объекта' };
-    // Доля массы внимания внутри bbox главного объекта
+    // Доля массы внимания внутри (расширенной) рамки главного объекта
     let inside = 0, total = 0;
     const { map, W, H } = saliency;
+    const bu0 = mainObjBBox.u0 - FOCUS_PAD.u, bu1 = mainObjBBox.u1 + FOCUS_PAD.u, bv0 = mainObjBBox.v0 - FOCUS_PAD.v, bv1 = mainObjBBox.v1 + FOCUS_PAD.v;
     for(let y=0;y<H;y++) for(let x=0;x<W;x++){
       const u = x/(W-1), v = y/(H-1);
-      const inBox = u >= mainObjBBox.u0 && u <= mainObjBBox.u1 && v >= mainObjBBox.v0 && v <= mainObjBBox.v1;
+      const inBox = u >= bu0 && u <= bu1 && v >= bv0 && v <= bv1;
       if(inBox) inside += map[y*W+x];
       total += map[y*W+x];
     }
@@ -3190,7 +3241,7 @@ const Evaluator = (() => {
     const balance = s_balance(centroid);
 
     // 9.4 Фокус / ясность (упрощённый saliency)
-    const saliency = buildSaliencySketch(frame, lens, cam, 64);
+    const saliency = SceneManager.withFrameState(frame, () => buildSaliencySketch(frame, lens, cam, 64));
     const focus = s_focus(saliency, mainBBox);
     const clarity = s_clarity(saliency);
 
@@ -3265,6 +3316,7 @@ const Evaluator = (() => {
     const evalOverlay = {
       thirds: true,
       heatmapData: saliency.heatDataForOverlay || null,
+      saliencyMap: { map: saliency.map, W: saliency.W, H: saliency.H },
       nearestThird: thirds.nearest ? { u: thirds.nearest[0], v: thirds.nearest[1] } : null,
       edges: edges.touches,
       horizonV: horizon.vH,
@@ -5527,7 +5579,9 @@ const UI = (() => {
     const lastOv = lastEval && lastEval.evalOverlay;
     const evalOverlay = lastOv ? {
       thirds: el.ovEvalThirds.checked,
-      heatmapData: el.ovEvalHeat.checked && objectsInfo.heatData ? objectsInfo.heatData : null,
+      // Тепловая карта оценки — это именно карта внимания (spectral residual), а не эвристика AnalyzerLite.
+      heatmapData: el.ovEvalHeat.checked ? (lastOv.heatmapData || null) : null,
+      saliencyMap: el.ovEvalHeat.checked ? (lastOv.saliencyMap || null) : null,
       nearestThird: lastOv.nearestThird,
       edges: el.ovEvalEdges.checked ? (lastOv.edges || []) : [],
       horizonV: el.ovEvalHorizon.checked ? lastOv.horizonV : null,
@@ -6888,6 +6942,19 @@ function runTests(){
     t('S_balance в центре', b, 1, 0.0001);
     const f = Evaluator._test.s_focus({ map: new Float32Array(16).fill(1/16), W:4, H:4 }, { u0:0, u1:0.5, v0:0, v1:0.5 });
     ok('S_focus API работает', Number.isFinite(f.s) && Number.isFinite(f.frac));
+    // Карта внимания (ТЗ 9.4): плоская картинка не даёт ложного пика, одиночный объект получает высокий фокус.
+    {
+      const W = 64, H = 32, mkImg = fn => { const g = new Float32Array(W*H); for(let y=0;y<H;y++) for(let x=0;x<W;x++) g[y*W+x] = fn(x/(W-1), y/(H-1)); return g; };
+      const inBox = (u,v,hw,hh) => (x,y) => Math.abs(x-u) < hw && Math.abs(y-v) < hh;
+      ok('Внимание: пустой (чёрный) кадр даёт нулевую карту без ложного пика', FFT.spectralResidual(mkImg(() => 0), W, H).every(x => x === 0));
+      ok('Внимание: пустой кадр — ясность нейтральная 0.5', Evaluator._test.s_clarity({ map: FFT.spectralResidual(mkImg(() => 0), W, H), W, H }).s === 0.5);
+      const one = FFT.spectralResidual(mkImg((x,y) => inBox(0.3,0.4,0.06,0.1)(x,y) ? 0.9 : 0.1), W, H);
+      const two = FFT.spectralResidual(mkImg((x,y) => (inBox(0.3,0.4,0.06,0.1)(x,y) || inBox(0.75,0.6,0.06,0.1)(x,y)) ? 0.9 : 0.1), W, H);
+      const bb = { u0:0.24, u1:0.36, v0:0.3, v1:0.5 };
+      const f1 = Evaluator._test.s_focus({ map:one, W, H }, bb), f2 = Evaluator._test.s_focus({ map:two, W, H }, bb);
+      ok('Внимание: одиночный объект в своей рамке — доля ≥ 0.7', f1.frac >= 0.7);
+      ok('Внимание: при равном сопернике фокус заметно ниже', f2.s < f1.s - 0.3);
+    }
     const uniformMap = { map: new Float32Array(16).fill(0.1), W:4, H:4 };
     const cl = Evaluator._test.s_clarity(uniformMap);
     ok('S_clarity API работает', !!cl && Number.isFinite(cl.s));
