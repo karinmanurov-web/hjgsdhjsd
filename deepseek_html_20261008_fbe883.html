@@ -590,6 +590,7 @@
         <div class="kv">Рабочий сенсор: <b id="infoWork">—</b></div>
         <div class="kv">Гиперфокал: <b id="infoH">—</b></div>
         <div class="kv">ГРИП: <b id="infoDof">—</b></div>
+        <div class="row"><label title="Резко снятый предмет притягивает взгляд (ТЗ 9.4). Расстояние фокуса и диафрагма берутся из этого кадра."><input type="checkbox" id="camDofAttn"> Резкость влияет на карту внимания</label></div>
       </div>
     </div>
 
@@ -2858,12 +2859,95 @@ const Evaluator = (() => {
     return saliencyRenderer;
   }
 
-  function buildSaliencySketch(frame, lens, cam, W=64, H=null){
+  /* ---------- Дополнения карты внимания (ТЗ 9.4): цветовой контраст в Lab и бонус резкости ---------- */
+  const SALIENCY_MIX = { spectral: 0.65, color: 0.35 };   // вклад spectral residual и цветового контраста
+  const COLOR_DE_FULL = 50;                                 // ΔE до среднего цвета, при котором контраст считается полным
+  const COLOR_DE_JND = 1;                                   // ΔE ниже порога заметности глаз считаем нулём (и гасим шум float)
+  const LUMA_RANGE_FULL = 0.1;                              // перепад яркости, начиная с которого spectral residual берётся с полным весом
+  const SHARP_BASE = 0.45;                                  // доля внимания, которую сохраняет полностью размытая точка
+  // sRGB (0..1, с гаммой) → CIELAB (D65).
+  function srgbToLab(r, g, b){
+    const lin = c => c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4);
+    const R = lin(r), G = lin(g), B = lin(b);
+    const X = (0.4124564*R + 0.3575761*G + 0.1804375*B) / 0.95047;
+    const Y =  0.2126729*R + 0.7151522*G + 0.0721750*B;
+    const Z = (0.0193339*R + 0.1191920*G + 0.9503041*B) / 1.08883;
+    const f = t => t > 216/24389 ? Math.cbrt(t) : (24389/27*t + 16)/116;
+    const fx = f(X), fy = f(Y), fz = f(Z);
+    return [116*fy - 16, 500*(fx - fy), 200*(fy - fz)];
+  }
+  // Spectral residual инвариантен к контрасту: кадр с перепадом яркости в пару градаций даёт такую же «уверенную» карту,
+  // как резкий. Поэтому его вклад гасим, пока перепад яркости меньше LUMA_RANGE_FULL (тогда решает цвет).
+  function lumaGain(gray){
+    let lo = Infinity, hi = -Infinity;
+    for(let i=0;i<gray.length;i++){ const v = gray[i]; if(v < lo) lo = v; if(v > hi) hi = v; }
+    return Math.min(1, Math.max(0, (hi - lo) / LUMA_RANGE_FULL));
+  }
+  // Цветовой контраст: расстояние ΔE (Lab) от каждого пикселя до среднего цвета кадра, 0..1 (ΔE 50 и больше = 1).
+  // rgb — Float32Array длины W*H*3 со значениями 0..1. Возвращает { map, mean:[L,a,b] }.
+  function colorContrastMap(rgb, W, H){
+    const n = W*H, lab = new Float32Array(n*3);
+    let mL = 0, mA = 0, mB = 0;
+    for(let i=0;i<n;i++){
+      const c = srgbToLab(rgb[i*3], rgb[i*3+1], rgb[i*3+2]);
+      lab[i*3] = c[0]; lab[i*3+1] = c[1]; lab[i*3+2] = c[2];
+      mL += c[0]; mA += c[1]; mB += c[2];
+    }
+    mL /= n; mA /= n; mB /= n;
+    const map = new Float32Array(n);
+    for(let i=0;i<n;i++){
+      const d = Math.hypot(lab[i*3]-mL, lab[i*3+1]-mA, lab[i*3+2]-mB);
+      map[i] = Math.min(1, Math.max(0, d - COLOR_DE_JND) / (COLOR_DE_FULL - COLOR_DE_JND));
+    }
+    return { map, mean:[mL, mA, mB] };
+  }
+  // Пятно нерезкости на сенсоре, мм (ТЗ 8.4): b = f²/(N·(s−f)) · |z−s|/z. z ≤ 0 — бесконечность (фон).
+  function blurCircleMm(fMm, N, sMm, zMm){
+    if(!(fMm > 0) || !(N > 0) || !(sMm > fMm)) return 0;
+    const k = fMm*fMm / (N*(sMm - fMm));
+    if(!(zMm > 0) || !Number.isFinite(zMm)) return k;
+    return k * Math.abs(zMm - sMm) / zMm;
+  }
+  // Резкость точки 0..1: внутри допустимого кружка c — 1, дальше убывает как 1/(1 + b/c − 1).
+  function sharpnessWeight(bMm, cMm){
+    if(!(cMm > 0)) return 1;
+    return 1 / (1 + Math.max(0, bMm/cMm - 1));
+  }
+  // Карта резкости для сетки W×H по карте глубины (ID/depth 64×H', расстояния в метрах; 0 = пусто, считаем бесконечностью).
+  function sharpnessMap(depthMap, lensCfg, W, H){
+    const out = new Float32Array(W*H).fill(1);
+    if(!depthMap || !depthMap.depth || !lensCfg) return out;
+    const { fMm, N, sM, cMm } = lensCfg, sMm = sM*1000;
+    const cache = new Map();
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+      const dx = Math.min(depthMap.W-1, Math.floor((x+0.5)/W*depthMap.W));
+      const dy = Math.min(depthMap.H-1, Math.floor((y+0.5)/H*depthMap.H));
+      const zM = depthMap.depth[dy*depthMap.W + dx];
+      let w = cache.get(zM);
+      if(w === undefined){ w = sharpnessWeight(blurCircleMm(fMm, N, sMm, zM*1000), cMm); cache.set(zM, w); }
+      out[y*W+x] = w;
+    }
+    return out;
+  }
+  // Сборка карты: spectral residual + цвет + (опционально) резкость, затем нормировка по максимуму.
+  // sr — карта spectral residual (0..1), colorMap/sharp — необязательные карты того же размера.
+  function mixSaliency(sr, colorMap, sharp){
+    const n = sr.length, out = new Float32Array(n);
+    for(let i=0;i<n;i++){
+      let v = colorMap ? SALIENCY_MIX.spectral*sr[i] + SALIENCY_MIX.color*colorMap[i] : sr[i];
+      if(sharp) v *= SHARP_BASE + (1 - SHARP_BASE)*sharp[i];
+      out[i] = v;
+    }
+    return out;
+  }
+
+  function buildSaliencySketch(frame, lens, cam, W=64, H=null, opts={}){
     if(!H) H = Math.max(2, Math.round(W * frame.aspect[1] / frame.aspect[0]));
     // Приводим W,H к степеням двойки (для radix-2 FFT)
     const W2 = 1 << Math.round(Math.log2(W));
     const H2 = 1 << Math.round(Math.log2(H));
     const gray = new Float32Array(W2 * H2);
+    const rgb = new Float32Array(W2 * H2 * 3);
 
     // Попытка честного saliency: рендерим кадр в маленький offscreen
     let gotPixels = false;
@@ -2885,11 +2969,13 @@ const Evaluator = (() => {
             const idx = (sy * W2 + x) * 4;
             const r0 = pixels[idx]/255, g0 = pixels[idx+1]/255, b0 = pixels[idx+2]/255;
             gray[y*W2 + x] = 0.2126*r0 + 0.7152*g0 + 0.0722*b0;
+            const q = (y*W2 + x)*3; rgb[q] = r0; rgb[q+1] = g0; rgb[q+2] = b0;
           }
         }
         gotPixels = true;
       }
     }catch(e){ /* fall through to heuristic */ }
+    const hasColor = gotPixels;
 
     if(!gotPixels){
       // Эвристика: центр-bias + bbox объектов (для случаев без GPU)
@@ -2900,7 +2986,13 @@ const Evaluator = (() => {
       }
     }
 
-    const sal = FFT.spectralResidual(gray, W2, H2);
+    const sr = FFT.spectralResidual(gray, W2, H2);
+    if(hasColor){ const gain = lumaGain(gray); if(gain < 1) for(let i=0;i<sr.length;i++) sr[i] *= gain; }
+    // Дополнения ТЗ 9.4: цветовой контраст (Lab, расстояние до среднего цвета) и бонус резкости (если включён ГРИП).
+    const colorMap = hasColor ? FFT.boxBlur(colorContrastMap(rgb, W2, H2).map, W2, H2, 1) : null;
+    let sharp = null;
+    if(opts.dof && opts.depthMap && opts.lensCfg) sharp = sharpnessMap(opts.depthMap, opts.lensCfg, W2, H2);
+    const sal = mixSaliency(sr, colorMap, sharp);
     // Center-bias: усиливаем центр
     for(let y=0;y<H2;y++) for(let x=0;x<W2;x++){
       const u = x/(W2-1), v = y/(H2-1);
@@ -2908,6 +3000,10 @@ const Evaluator = (() => {
       const bias = 0.6 + 0.4 * Math.exp(-(dx*dx + dy*dy) / (2*0.4*0.4));
       sal[y*W2 + x] *= bias;
     }
+    let salMax = 0;
+    for(let i=0;i<sal.length;i++) if(sal[i] > salMax) salMax = sal[i];
+    if(salMax > 1e-3) for(let i=0;i<sal.length;i++) sal[i] /= salMax;
+    else sal.fill(0);                       // ничего заметного: не раздуваем шум нормировкой
 
     // Центроид saliency
     let su = 0, sv = 0, sw = 0;
@@ -2936,7 +3032,7 @@ const Evaluator = (() => {
     peaks.sort((a,b) => b.w - a.w);
     const heatDataForOverlay = peaks.slice(0, 12);
 
-    return { map: sal, W: W2, H: H2, centroid, heatDataForOverlay };
+    return { map: sal, W: W2, H: H2, centroid, heatDataForOverlay, parts:{ color: !!colorMap, sharp: !!sharp } };
   }
   // Карта внимания размыта (≈3 клетки на карте 64×32), поэтому часть массы объекта «вытекает» за его рамку.
   // Считаем долю внутри рамки, расширенной на ширину размытия; иначе одиночный объект получал фокус около 0.
@@ -3241,12 +3337,15 @@ const Evaluator = (() => {
     const balance = s_balance(centroid);
 
     // 9.4 Фокус / ясность (упрощённый saliency)
-    const saliency = SceneManager.withFrameState(frame, () => buildSaliencySketch(frame, lens, cam, 64));
+    // ID-карта и карта глубины — аналитические карты сцены; глубина нужна и для бонуса резкости.
+    const idDepthMaps = buildIDDepthMaps(frame, cam, 64);
+    const dofOn = !!frame.lens?.dof;
+    const saliency = SceneManager.withFrameState(frame, () => buildSaliencySketch(frame, lens, cam, 64, null, {
+      dof: dofOn, depthMap: idDepthMaps,
+      lensCfg: { fMm: frame.lens.focalMm, N: frame.lens.aperture, sM: frame.lens.focusDistM, cMm: lens.c }
+    }));
     const focus = s_focus(saliency, mainBBox);
     const clarity = s_clarity(saliency);
-
-    // ID-карта и карта глубины используются как аналитические карты сцены.
-    const idDepthMaps = buildIDDepthMaps(frame, cam, 64);
 
     // 9.5 Края
     const edges = s_edges(frame, lens, cam);
@@ -3269,7 +3368,7 @@ const Evaluator = (() => {
       },
       { id:'focus', name:'Фокус внимания',
         s: focus.s,
-        why: `Доля внимания на главном объекте: ${(focus.frac*100).toFixed(0)}%.`,
+        why: `Доля внимания на главном объекте: ${(focus.frac*100).toFixed(0)}%` + (saliency.parts.sharp ? ' (с учётом резкости: ГРИП включена).' : '.'),
         act: focus.s < 0.6 ? 'Усилить контраст или изоляцию главного объекта.' : null
       },
       { id:'clarity', name:'Ясность композиции',
@@ -3334,7 +3433,7 @@ const Evaluator = (() => {
     };
   }
 
-  return { evaluate, screenItems, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint, rasterizeIDDepthMap } };
+  return { evaluate, screenItems, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint, rasterizeIDDepthMap, srgbToLab, colorContrastMap, lumaGain, blurCircleMm, sharpnessWeight, sharpnessMap, mixSaliency } };
 })();
 
 /* ============================================================
@@ -3999,6 +4098,7 @@ const UI = (() => {
       infoCrop: document.getElementById('infoCrop'), infoEqF: document.getElementById('infoEqF'),
       infoWork: document.getElementById('infoWork'), infoH: document.getElementById('infoH'),
       infoDof: document.getElementById('infoDof'),
+      camDofAttn: document.getElementById('camDofAttn'),
       btnImprove: document.getElementById('btnImprove'),
       improveBox: document.getElementById('improveBox'),
       btnLensCompare: document.getElementById('btnLensCompare'),
@@ -4243,6 +4343,10 @@ const UI = (() => {
     });
     el.camF.addEventListener('input', () => setFocal(parseFloat(el.camF.value), false));
     el.camFn.addEventListener('change', () => setFocal(parseFloat(el.camFn.value), false));
+    el.camDofAttn.addEventListener('change', () => {
+      State.History.tx(() => { State.currentFrame().lens.dof = el.camDofAttn.checked; });
+      State.save(); scheduleEval();
+    });
     el.camN.addEventListener('input', () => setAperture(parseFloat(el.camN.value)));
     el.camNn.addEventListener('change', () => setAperture(parseFloat(el.camNn.value)));
     el.camS.addEventListener('input', () => setFocusDist(parseFloat(el.camS.value)));
@@ -6006,6 +6110,7 @@ const UI = (() => {
     el.infoWork.textContent = lens.working.w.toFixed(1) + ' × ' + lens.working.h.toFixed(1) + ' мм';
     el.infoH.textContent = (lens.H/1000).toFixed(2) + ' м';
     const dn = lens.Dn/1000, df = lens.Df === Infinity ? Infinity : lens.Df/1000;
+    el.camDofAttn.checked = !!frame.lens.dof;
     el.infoDof.textContent = dn.toFixed(2) + ' м / ' + (df === Infinity ? '∞' : df.toFixed(2) + ' м');
     el.hudFov.textContent = lens.fovV.toFixed(1);
     el.hudF.textContent = frame.lens.focalMm.toFixed(1);
@@ -6954,6 +7059,16 @@ function runTests(){
       const f1 = Evaluator._test.s_focus({ map:one, W, H }, bb), f2 = Evaluator._test.s_focus({ map:two, W, H }, bb);
       ok('Внимание: одиночный объект в своей рамке — доля ≥ 0.7', f1.frac >= 0.7);
       ok('Внимание: при равном сопернике фокус заметно ниже', f2.s < f1.s - 0.3);
+      // Дополнения ТЗ 9.4: цвет в Lab и резкость (ГРИП).
+      const T = Evaluator._test, near = (x,y,e) => Math.abs(x-y) <= e;
+      const lw = T.srgbToLab(1,1,1), lr = T.srgbToLab(1,0,0);
+      ok('Lab: белый = (100,0,0), красный sRGB = (53.2, 80.1, 67.2)', near(lw[0],100,0.05) && near(lw[1],0,0.05) && near(lr[0],53.24,0.1) && near(lr[1],80.09,0.2) && near(lr[2],67.20,0.2));
+      ok('Цвет: плоская картинка — нулевой контраст', T.colorContrastMap(new Float32Array(W*H*3).fill(0.4), W, H).map.every(v => v === 0));
+      ok('Резкость: на границах ГРИП из ТЗ (85 мм, f/1.8, 3 м) пятно = допустимому кружку 0.03 мм',
+        near(T.blurCircleMm(85,1.8,3000,2936), 0.03, 0.0005) && near(T.blurCircleMm(85,1.8,3000,3067), 0.03, 0.0005) && T.blurCircleMm(85,1.8,3000,3000) === 0);
+      ok('Резкость: внутри кружка = 1, при 2c = 0.5', T.sharpnessWeight(0.03,0.03) === 1 && near(T.sharpnessWeight(0.06,0.03), 0.5, 1e-9));
+      ok('Резкость: без глубины все точки резкие', T.sharpnessMap(null, { fMm:50, N:2.8, sM:5, cMm:0.03 }, 4, 4).every(v => v === 1));
+      ok('Внимание: плоская яркость — вклад spectral residual гасится', T.lumaGain(new Float32Array([0.5,0.5])) === 0 && T.lumaGain(new Float32Array([0,1])) === 1);
     }
     const uniformMap = { map: new Float32Array(16).fill(0.1), W:4, H:4 };
     const cl = Evaluator._test.s_clarity(uniformMap);

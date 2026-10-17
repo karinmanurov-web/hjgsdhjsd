@@ -13,7 +13,16 @@ Checked in Node (pure logic extracted from the HTML) and fixed what did not hold
 4. **Wrong heat data in the overlay.** "Тепловая (оценка)" drew `AnalyzerLite.heatData` (size heuristics), the computed saliency (`lastEval.evalOverlay.heatmapData`) was ignored. It now draws the whole attention map as a heat image (transparent → yellow → red); falls back to the peak blobs.
 
 ## Not done (TZ extras)
-- Lab colour contrast and sharpness (depth of field) bonus for the map; centre bias is applied (0.6–1.0).
 - The separate "Тепловая карта" checkbox (`ovHeat`, general overlays) still uses the `AnalyzerLite` heuristic.
 - `Evaluator` still contains an unused duplicate FFT / `spectralResidual` / `renderSaliencyGray`; only `FFT.spectralResidual` is used.
 - Offscreen saliency render rounds width/height to powers of two (aspect slightly squashed for non-16:9 frames).
+
+## Follow-up: Lab colour contrast and sharpness bonus (TZ 9.4 extras)
+
+Map = `0.65 · spectral residual + 0.35 · colour contrast`, optionally × sharpness, × centre bias (0.6–1.0), normalised to max 1 (an all-zero map stays zero).
+
+- **Colour contrast.** sRGB → CIELAB (D65); ΔE from every pixel to the frame's mean colour; ΔE ≤ 1 (just-noticeable) = 0, ΔE ≥ 50 = 1; lightly blurred. The renderer's RGB is now kept (the map used grey only). Checked: white = (100,0,0), sRGB red = (53.24, 80.09, 67.20).
+- **Luminance gain.** Spectral residual is contrast-invariant: a frame whose brightness differs by one or two levels produced a "confident" map out of noise and drowned the colour term. Its weight is now scaled by `clamp(range/0.1, 0, 1)`, so an equal-luminance object is found through colour (mass in its box 0.62 vs ~0.17 before).
+- **Sharpness bonus (DoF).** Blur circle on the sensor from TZ 8.4: `b = f²/(N(s−f))·|z−s|/z` (background z→∞). Weight = 1 inside the permissible circle `c`, then `1/(1 + b/c − 1)`; a fully blurred point keeps 45 % of its attention (`SHARP_BASE`). Cross-check: at the TZ example's near/far limits (85 mm, f/1.8, 3 m → 2936/3067 mm) `b = c = 0.03 mm`. Depth comes from the analytic ID/depth map (object-centre distance to the camera, not along the axis; 64×H grid sampled for the 64×32 map).
+- **Switch.** `frame.lens.dof` (TZ's `lens.dof: bool`, default off, as TZ says evaluation runs on the sharp picture unless asked) — checkbox «Резкость влияет на карту внимания» in the camera panel. Aperture and focus distance come from the frame; Improve does not change them. The focus criterion's explanation says when sharpness was applied.
+- Tests: Node (`Lab`, blur at TZ limits, weights, depth→sharpness map, mix, flat frame, wiring) and in-app. Not run in a browser; the 0.65/0.35 mix, `SHARP_BASE`, `COLOR_DE_FULL` and `LUMA_RANGE_FULL` are reasonable defaults, not calibrated on real renders.
