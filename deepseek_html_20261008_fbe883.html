@@ -142,6 +142,7 @@
     padding:0 4px;border-radius:3px;font-weight:600}
   .choiceBtn{display:block;width:100%;text-align:left;margin:6px 0;padding:8px 12px}
   .filmItem.dragTarget{border-color:var(--warn)}
+  .filmItem .shot{position:absolute;top:2px;right:4px;z-index:2;background:rgba(0,0,0,.7);padding:0 4px;border-radius:3px;font-size:10px;font-weight:600;color:#ffd75e}
   .filmItem .dur{position:absolute;right:4px;bottom:2px;z-index:2;background:rgba(0,0,0,.7);padding:0 4px;border-radius:3px;font-size:10px}
   .toast{position:absolute;top:calc(var(--h-ruler) + 44px);left:50%;transform:translateX(-50%);
     background:rgba(0,0,0,.9);color:#fff;padding:6px 12px;border-radius:4px;
@@ -590,6 +591,7 @@
         <div class="kv">Рабочий сенсор: <b id="infoWork">—</b></div>
         <div class="kv">Гиперфокал: <b id="infoH">—</b></div>
         <div class="kv">ГРИП: <b id="infoDof">—</b></div>
+        <div class="kv">План: <b id="infoShot">—</b></div>
         <div class="row"><label title="Резко снятый предмет притягивает взгляд (ТЗ 9.4). Расстояние фокуса и диафрагма берутся из этого кадра."><input type="checkbox" id="camDofAttn"> Резкость влияет на карту внимания</label></div>
       </div>
     </div>
@@ -4077,6 +4079,51 @@ const ImproveEngine = (() => {
 })();
 
 /* ============================================================
+   Continuity — этап 7: типы планов, правило 180°, движение камеры (чистая логика)
+   ============================================================ */
+const Continuity = (() => {
+  /* ---- Типы планов (ТЗ, «Для кино/раскадровки»): авто-метка по доле главного объекта ----
+     Объект считаем «фигурой в рост». ratio — его размер в высотах кадра: чем крупнее, тем больше.
+     Размер = max(высота, ширина·aspect·0.5): широкий предмет, заполнивший кадр по ширине, не должен считаться «общим планом». */
+  const SHOT_TYPES = [
+    { code:'ELS', name:'Сверхобщий',     max:0.15 },
+    { code:'LS',  name:'Общий',          max:0.60 },
+    { code:'MLS', name:'Средне-общий',   max:1.20 },
+    { code:'MS',  name:'Средний',        max:1.80 },
+    { code:'MCU', name:'Средне-крупный', max:2.60 },
+    { code:'CU',  name:'Крупный',        max:4.50 },
+    { code:'ECU', name:'Деталь',         max:Infinity }
+  ];
+  function classifyShot(ratio){
+    if(!Number.isFinite(ratio) || ratio <= 0) return null;
+    return SHOT_TYPES.find(t => ratio < t.max) || SHOT_TYPES[SHOT_TYPES.length-1];
+  }
+  // Размер объекта в высотах кадра по его экранной рамке (в долях кадра, без обрезки по краям).
+  function shotRatio(item, aspect){
+    if(!item) return NaN;
+    const h = item.v1 - item.v0, w = item.u1 - item.u0;
+    return Math.max(h, w * aspect * 0.5);
+  }
+  function mainObjectOf(frame){
+    const objs = State.get().objects || [];
+    return (frame?.camera?.mainObjId && objs.find(o => o.id === frame.camera.mainObjId)) || objs.find(o => o.role === 'main') || null;
+  }
+  // { code, name, ratio, objId } или null, если главного объекта нет или он вне кадра.
+  function shotInfo(frame){
+    try{
+      const main = mainObjectOf(frame);
+      if(!main) return null;
+      const item = Evaluator.screenItems(frame).find(it => it.id === main.id);
+      if(!item) return null;
+      const aspect = (frame.aspect && frame.aspect[1]) ? frame.aspect[0] / frame.aspect[1] : 16/9;
+      const ratio = shotRatio(item, aspect), type = classifyShot(ratio);
+      return type ? { code:type.code, name:type.name, ratio, objId:main.id } : null;
+    }catch(_){ return null; }
+  }
+  return { SHOT_TYPES, classifyShot, shotRatio, shotInfo, mainObjectOf };
+})();
+
+/* ============================================================
    UI
    ============================================================ */
 const UI = (() => {
@@ -4122,6 +4169,7 @@ const UI = (() => {
       infoWork: document.getElementById('infoWork'), infoH: document.getElementById('infoH'),
       infoDof: document.getElementById('infoDof'),
       camDofAttn: document.getElementById('camDofAttn'),
+      infoShot: document.getElementById('infoShot'),
       btnImprove: document.getElementById('btnImprove'),
       improveBox: document.getElementById('improveBox'),
       btnLensCompare: document.getElementById('btnLensCompare'),
@@ -5097,6 +5145,12 @@ const UI = (() => {
       const num = document.createElement('span'); num.className = 'num'; num.textContent = i+1;
       const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = f.name;
       item.appendChild(num); item.appendChild(lbl);
+      const si = Continuity.shotInfo(f);
+      if(si){
+        const sh = document.createElement('span'); sh.className = 'shot'; sh.textContent = si.code;
+        sh.title = 'План: ' + si.name + ' (главный объект ≈ ' + si.ratio.toFixed(2) + ' высоты кадра)';
+        item.appendChild(sh);
+      }
       if(f.durationSec){
         const du = document.createElement('span'); du.className = 'dur'; du.textContent = f.durationSec + ' с';
         item.appendChild(du);
@@ -6134,6 +6188,7 @@ const UI = (() => {
     el.infoH.textContent = (lens.H/1000).toFixed(2) + ' м';
     const dn = lens.Dn/1000, df = lens.Df === Infinity ? Infinity : lens.Df/1000;
     el.camDofAttn.checked = !!frame.lens.dof;
+    { const si = Continuity.shotInfo(frame); el.infoShot.textContent = si ? si.code + ' · ' + si.name + ' (' + si.ratio.toFixed(2) + ')' : '—'; }
     el.infoDof.textContent = dn.toFixed(2) + ' м / ' + (df === Infinity ? '∞' : df.toFixed(2) + ' м');
     el.hudFov.textContent = lens.fovV.toFixed(1);
     el.hudF.textContent = frame.lens.focalMm.toFixed(1);
@@ -7259,6 +7314,14 @@ function runTests(){
     ok('Все кадры сохранены (20)', Q2.frames.length === 20);
   }
 
+  /* ---- Этап 7: типы планов ---- */
+  {
+    const C = Continuity, code = r => (C.classifyShot(r) || {}).code;
+    ok('Планы: границы ELS/LS/MLS/MS/MCU/CU/ECU', code(0.1)==='ELS' && code(0.3)==='LS' && code(0.9)==='MLS' && code(1.5)==='MS' && code(2.2)==='MCU' && code(3.5)==='CU' && code(6)==='ECU');
+    ok('Планы: неверные доли дают null, а не метку', [0, -1, NaN, Infinity].every(v => C.classifyShot(v) === null));
+    ok('Планы: высокая фигура — доля = высота кадра', Math.abs(C.shotRatio({u0:.4,u1:.5,v0:.1,v1:.9}, 16/9) - 0.8) < 1e-9);
+    ok('Планы: широкий предмет на всю ширину не считается «сверхобщим»', C.shotRatio({u0:0,u1:1,v0:.45,v1:.55}, 16/9) > 0.8);
+  }
   /* ---- Этап 6: поиск улучшений, сила коррекции, охрана замысла ---- */
   {
     const IT=ImproveEngine._test;
