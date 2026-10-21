@@ -608,6 +608,21 @@
       </div>
     </div>
 
+    <!-- Последовательность -->
+    <div class="panelSection collapsed" data-sec="seq">
+      <h3>Последовательность <span class="badge" id="seqBadge">0</span></h3>
+      <div class="body">
+        <div class="hint">Правило 180°: камера в соседних кадрах должна оставаться по одну сторону линии между двумя героями.</div>
+        <div class="row"><label>Линия: A</label><select id="seqLineA" style="flex:1"></select></div>
+        <div class="row"><label>Линия: B</label><select id="seqLineB" style="flex:1"></select></div>
+        <div class="row"><button id="btnSeqAuto">Выбрать автоматически</button><label><input type="checkbox" id="seqShowLine"> Линия в 3D</label></div>
+        <div id="seqInfo" class="hint"></div>
+        <div id="seqList"></div>
+        <div style="font-weight:600;margin-top:6px">Разнообразие планов</div>
+        <div id="seqVariety" class="hint"></div>
+      </div>
+    </div>
+
     <!-- Сетки -->
     <div class="panelSection collapsed" data-sec="grids">
       <h3>Сетки и направляющие <span class="badge" id="gridsBadge">0</span></h3>
@@ -745,6 +760,7 @@ const State = (() => {
     evalProfile: 'classic',
     improveStrength: 'medium',                   // «Улучшить»: soft | medium | strong
     improveObjects: true,                        // «Улучшить» может двигать/масштабировать объекты (кроме якорей и замков)
+    actionLine: { a:null, b:null, show:true },   // линия действия (правило 180°): два объекта; null = выбрать автоматически
     groups: [],                                  // [{id,name,collapsed}]; у объекта — groupId
     freeProfile: { enabled: {}, weights: {} },   // профиль «Свободный»; недостающие id добивает EvaluatorV2.normalizeFree
     evalAuto: true
@@ -876,6 +892,8 @@ const State = (() => {
     if(!project.evalProfile) project.evalProfile = 'classic';
     if(!['soft','medium','strong'].includes(project.improveStrength)) project.improveStrength = 'medium';
     if(typeof project.improveObjects !== 'boolean') project.improveObjects = true;
+    if(!project.actionLine || typeof project.actionLine !== 'object') project.actionLine = { a:null, b:null, show:true };
+    if(typeof project.actionLine.show !== 'boolean') project.actionLine.show = true;
     if(!Array.isArray(project.groups)) project.groups = [];
     if(!project.freeProfile || typeof project.freeProfile !== 'object') project.freeProfile = { enabled:{}, weights:{} };
     if(!project.freeProfile.enabled) project.freeProfile.enabled = {};
@@ -1672,6 +1690,21 @@ const SceneManager = (() => {
       applyColor(data, frame);
     }
   }
+  // Линия действия (правило 180°) на полу редактора. Лежит в scene, а не в rootGroup, поэтому в кадры не попадает.
+  let actionLineObj = null;
+  function setActionLine(seg){
+    if(actionLineObj){
+      scene.remove(actionLineObj);
+      actionLineObj.geometry.dispose(); actionLineObj.material.dispose();
+      actionLineObj = null;
+    }
+    if(!seg || !scene) return;
+    const geom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(seg.ax, 0.03, seg.az), new THREE.Vector3(seg.bx, 0.03, seg.bz)]);
+    const mat = new THREE.LineDashedMaterial({ color:0xffa030, dashSize:0.35, gapSize:0.2 });
+    actionLineObj = new THREE.Line(geom, mat);
+    actionLineObj.computeLineDistances();
+    scene.add(actionLineObj);
+  }
   // Выполнить fn, пока объекты показаны в состоянии кадра frame (с его overrides), и вернуть сцену как была.
   // Нужен для рендера и карты внимания кандидатов «Улучшить»: у них правки объектов лежат только в overrides.
   function withFrameState(frame, fn){
@@ -1927,7 +1960,7 @@ const SceneManager = (() => {
     updateParamsFromData, rebuild, rebuildOne, applyFrameState, fitView, resetView, setEditorViewPreset,
     updateShotCamViz, readCamGroupToShot,
     setSceneRotation, getSceneRotation, applySceneRotationFromState,
-    setEditorMode, getEditorMode, setHost, withFrameState,
+    setEditorMode, getEditorMode, setHost, withFrameState, setActionLine,
     getRenderInfo(){
       return { objectMap, rootGroup, editorCamera, orbit, renderer, scene };
     }
@@ -4120,7 +4153,70 @@ const Continuity = (() => {
       return type ? { code:type.code, name:type.name, ratio, objId:main.id } : null;
     }catch(_){ return null; }
   }
-  return { SHOT_TYPES, classifyShot, shotRatio, shotInfo, mainObjectOf };
+  /* ---- Правило 180° (линия действия) ----
+     Линия проходит через двух выбранных персонажей/объектов (на плоскости пола, оси X и Z). Камера в соседних кадрах
+     должна оставаться по одну сторону от неё; пересечение между двумя подряд идущими кадрами — «перепрыгивание».
+     Камера прямо на линии (ближе LINE_EPS_M) — нейтральный план: через него линию пересекать можно. */
+  const LINE_EPS_M = 0.25;
+  const MIN_LINE_LEN_M = 0.05;
+  const posOf = (frame, o) => {
+    const t = { ...(o.transform || {}), ...(frame?.overrides?.[o.id]?.transform || {}) };
+    const p = t.pos || [0,0,0];
+    return [Number(p[0]) || 0, Number(p[1]) || 0, Number(p[2]) || 0];
+  };
+  const groundDist = (p, q) => Math.hypot(p[0]-q[0], p[2]-q[2]);
+  // Какие два объекта задают линию: выбранные в проекте, иначе главный и ближайший к нему (по полу).
+  function resolveActionLine(project, frame){
+    const objs = (project.objects || []).filter(o => o.role !== 'guide');
+    if(objs.length < 2) return null;
+    const byId = id => objs.find(o => o.id === id);
+    const al = project.actionLine || {};
+    const A = byId(al.a), B = byId(al.b);
+    if(A && B && A.id !== B.id) return { a:A.id, b:B.id, auto:false };
+    const main = mainObjectOf(frame);
+    const first = (main && byId(main.id)) || objs[0];
+    let best = null, bd = Infinity;
+    for(const o of objs){
+      if(o.id === first.id) continue;
+      const d = groundDist(posOf(frame, first), posOf(frame, o));
+      if(d < bd){ bd = d; best = o; }
+    }
+    return best ? { a:first.id, b:best.id, auto:true } : null;
+  }
+  // Сторона камеры: +1 / −1 / 0 (на линии), и расстояние до линии в метрах. Линия — бесконечная прямая через A и B.
+  function cameraSide(frame, objA, objB){
+    const a = posOf(frame, objA), b = posOf(frame, objB);
+    const cam = frame?.camera?.pos || [0,0,0];
+    const len = groundDist(a, b);
+    if(!(len > MIN_LINE_LEN_M)) return { side:0, dist:NaN, degenerate:true };
+    const cross = (b[0]-a[0])*((cam[2]||0)-a[2]) - (b[2]-a[2])*((cam[0]||0)-a[0]);
+    const dist = Math.abs(cross) / len;
+    return { side: dist < LINE_EPS_M ? 0 : Math.sign(cross), dist, degenerate:false };
+  }
+  // Проверка раскадровки: по кадрам сторона камеры; нарушения — только между соседними кадрами.
+  // Линия берётся из resolveActionLine, но положения объектов — каждого кадра свои.
+  function checkSequence(project, currentFrame){
+    const frames = project.frames || [];
+    const ids = resolveActionLine(project, currentFrame || frames[0]);
+    if(!ids) return { line:null, frames:[], violations:[] };
+    const objs = project.objects || [];
+    const A = objs.find(o => o.id === ids.a), B = objs.find(o => o.id === ids.b);
+    const sides = frames.map(f => ({ id:f.id, ...cameraSide(f, A, B) }));
+    const violations = [];
+    for(let i=0;i+1<sides.length;i++){
+      const s0 = sides[i].side, s1 = sides[i+1].side;
+      if(s0 !== 0 && s1 !== 0 && s0 !== s1) violations.push({ from:i, to:i+1, fromId:sides[i].id, toId:sides[i+1].id });
+    }
+    return { line:ids, frames:sides, violations };
+  }
+  // Отрезок линии на полу для показа в 3D (с продолжением ext метров за каждый конец) или null.
+  function lineSegment(frame, objA, objB, ext=4){
+    const a = posOf(frame, objA), b = posOf(frame, objB), len = groundDist(a, b);
+    if(!(len > MIN_LINE_LEN_M)) return null;
+    const ux = (b[0]-a[0])/len, uz = (b[2]-a[2])/len;
+    return { ax:a[0]-ux*ext, az:a[2]-uz*ext, bx:b[0]+ux*ext, bz:b[2]+uz*ext };
+  }
+  return { SHOT_TYPES, classifyShot, shotRatio, shotInfo, mainObjectOf, LINE_EPS_M, resolveActionLine, cameraSide, checkSequence, lineSegment };
 })();
 
 /* ============================================================
@@ -4170,6 +4266,9 @@ const UI = (() => {
       infoDof: document.getElementById('infoDof'),
       camDofAttn: document.getElementById('camDofAttn'),
       infoShot: document.getElementById('infoShot'),
+      seqLineA: document.getElementById('seqLineA'), seqLineB: document.getElementById('seqLineB'),
+      btnSeqAuto: document.getElementById('btnSeqAuto'), seqShowLine: document.getElementById('seqShowLine'),
+      seqInfo: document.getElementById('seqInfo'), seqList: document.getElementById('seqList'), seqVariety: document.getElementById('seqVariety'), seqBadge: document.getElementById('seqBadge'),
       btnImprove: document.getElementById('btnImprove'),
       improveBox: document.getElementById('improveBox'),
       btnLensCompare: document.getElementById('btnLensCompare'),
@@ -4545,6 +4644,11 @@ const UI = (() => {
       State.save();
     });
     el.improveObjectsChk.checked = State.get().improveObjects !== false;
+    const setLine = (a, b) => { State.History.tx(() => { const al = State.get().actionLine; al.a = a; al.b = b; }); State.save(); refreshSequencePanel(); };
+    el.seqLineA.addEventListener('change', () => setLine(el.seqLineA.value, el.seqLineB.value));
+    el.seqLineB.addEventListener('change', () => setLine(el.seqLineA.value, el.seqLineB.value));
+    el.btnSeqAuto.addEventListener('click', () => setLine(null, null));
+    el.seqShowLine.addEventListener('change', () => { State.History.tx(() => { State.get().actionLine.show = el.seqShowLine.checked; }); State.save(); refreshSequencePanel(); });
     el.improveObjectsChk.addEventListener('change', () => {
       State.History.tx(() => { State.get().improveObjects = el.improveObjectsChk.checked; });
       State.save();
@@ -5202,6 +5306,60 @@ const UI = (() => {
       if(ir.left < fr.left) film.scrollLeft -= (fr.left - ir.left) + 8;
       else if(ir.right > fr.right) film.scrollLeft += (ir.right - fr.right) + 8;
     }
+    refreshSequencePanel();
+  }
+  // Панель «Последовательность»: линия действия (правило 180°), сторона камеры в каждом кадре, разнообразие планов.
+  function refreshSequencePanel(){
+    try{
+      const project = State.get(), frames = project.frames || [], cur = State.currentFrame();
+      const objs = (project.objects || []).filter(o => o.role !== 'guide');
+      const al = project.actionLine || (project.actionLine = { a:null, b:null, show:true });
+      const res = Continuity.checkSequence(project, cur);
+      // Списки выбора: показываем реально действующую пару (даже если она выбрана автоматически).
+      const fill = (sel, value) => {
+        sel.innerHTML = '';
+        for(const o of objs){ const op = document.createElement('option'); op.value = o.id; op.textContent = o.name || o.id; sel.appendChild(op); }
+        if(value) sel.value = value;
+      };
+      fill(el.seqLineA, res.line && res.line.a); fill(el.seqLineB, res.line && res.line.b);
+      el.seqShowLine.checked = al.show !== false;
+      el.seqBadge.textContent = String(res.violations.length);
+      el.seqBadge.style.background = res.violations.length ? '#c0392b' : '';
+      if(!res.line){
+        el.seqInfo.textContent = 'Нужно минимум два объекта (не направляющих), чтобы задать линию действия.';
+        el.seqList.innerHTML = '';
+      } else {
+        const nm = id => { const o = objs.find(x => x.id === id); return o ? (o.name || o.id) : id; };
+        el.seqInfo.textContent = 'Линия: «' + nm(res.line.a) + '» — «' + nm(res.line.b) + '»' + (res.line.auto ? ' (автоматически)' : '') +
+          (res.violations.length ? '. Перепрыгиваний: ' + res.violations.length : '. Камера не пересекает линию между соседними кадрами.');
+        el.seqList.innerHTML = '';
+        const bad = new Set(res.violations.map(v => v.to));
+        res.frames.forEach((fs, i) => {
+          const row = document.createElement('div'); row.className = 'kv';
+          const sideTxt = fs.degenerate ? '—' : (fs.side === 0 ? 'на линии' : (fs.side > 0 ? 'сторона A' : 'сторона B'));
+          const si = Continuity.shotInfo(frames[i]);
+          row.innerHTML = (i+1) + '. ' + escapeHtml(frames[i].name || '') + ' <b>' + (si ? si.code : '·') + '</b> · ' + sideTxt +
+            (bad.has(i) ? ' <span style="color:#ff6b6b">⚠ перешла линию 180° (кадр ' + i + ' → ' + (i+1) + ')</span>' : '');
+          row.style.cursor = 'pointer';
+          row.addEventListener('click', () => selectFrameById(frames[i].id));
+          el.seqList.appendChild(row);
+        });
+      }
+      // Диаграмма разнообразия планов: сколько кадров каждого типа.
+      const counts = {}; let total = 0;
+      for(const f of frames){ const si = Continuity.shotInfo(f); if(si){ counts[si.code] = (counts[si.code] || 0) + 1; total++; } }
+      el.seqVariety.innerHTML = total ? Continuity.SHOT_TYPES.map(t => {
+        const n = counts[t.code] || 0;
+        return '<div class="kv"><span style="display:inline-block;width:34px">' + t.code + '</span><span style="display:inline-block;height:8px;width:' + Math.round(110 * n / total) + 'px;background:#ffd75e;border-radius:2px;vertical-align:middle"></span> ' + n + '</div>';
+      }).join('') + (Object.keys(counts).length < 3 && frames.length >= 4 ? '<div class="hint">Мало разных планов — раскадровка может выглядеть монотонно.</div>' : '') : 'Нет кадров с главным объектом в поле зрения.';
+      // Линия на полу в 3D-редакторе.
+      let seg = null;
+      if(res.line && al.show !== false && cur){
+        const A = project.objects.find(o => o.id === res.line.a), B = project.objects.find(o => o.id === res.line.b);
+        seg = Continuity.lineSegment(cur, A, B);
+      }
+      SceneManager.setActionLine(seg);
+    }catch(err){ console.warn('Sequence panel failed', err); }
   }
   /* ============================================================
      Sequence — этап 7: проигрывание раскадровки
@@ -7321,6 +7479,21 @@ function runTests(){
     ok('Планы: неверные доли дают null, а не метку', [0, -1, NaN, Infinity].every(v => C.classifyShot(v) === null));
     ok('Планы: высокая фигура — доля = высота кадра', Math.abs(C.shotRatio({u0:.4,u1:.5,v0:.1,v1:.9}, 16/9) - 0.8) < 1e-9);
     ok('Планы: широкий предмет на всю ширину не считается «сверхобщим»', C.shotRatio({u0:0,u1:1,v0:.45,v1:.55}, 16/9) > 0.8);
+    // Правило 180°: линия через двух героев, камера в соседних кадрах по одну сторону.
+    {
+      const mkO = (id, x, z, role) => ({ id, name:id, role:role || 'secondary', transform:{ pos:[x,0,z] } });
+      const oa = mkO('a',-1,0,'main'), ob = mkO('b',1,0);
+      const mkF = (id, x, z) => ({ id, camera:{ pos:[x,1.6,z] }, overrides:{} });
+      const side = (x, z) => C.cameraSide(mkF('f',x,z), oa, ob).side;
+      ok('180°: камеры по разные стороны линии имеют разный знак', side(0,4) !== 0 && side(0,4) === -side(0,-4));
+      ok('180°: камера на самой линии — нейтральная (0)', side(6,0.05) === 0);
+      const proj = { objects:[oa, ob], frames:[mkF('1',0,4), mkF('2',2,3), mkF('3',0,-4)], actionLine:{ a:null, b:null, show:true } };
+      const rs = C.checkSequence(proj, proj.frames[0]);
+      ok('180°: перепрыгивание найдено между кадрами 2 и 3', rs.violations.length === 1 && rs.violations[0].from === 1 && rs.violations[0].to === 2);
+      proj.frames = [mkF('1',0,4), mkF('2',6,0.05), mkF('3',0,-4)];
+      ok('180°: переход через нейтральный план на линии разрешён', C.checkSequence(proj, proj.frames[0]).violations.length === 0);
+      ok('180°: один объект — линии нет', C.resolveActionLine({ objects:[oa], actionLine:{} }, mkF('f',0,4)) === null);
+    }
   }
   /* ---- Этап 6: поиск улучшений, сила коррекции, охрана замысла ---- */
   {
