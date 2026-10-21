@@ -2941,6 +2941,24 @@ const Evaluator = (() => {
     return out;
   }
 
+  // Зеркальная симметрия (ТЗ 9.3): сравнение яркости слева и справа от вертикальной оси кадра.
+  // ТЗ: S = 1 − mean|L(u,v) − L(1−u,v)|. На разреженном кадре (мелкие предметы на тёмном фоне) эта величина почти
+  // всегда ≈ 1 даже у несимметричной композиции, поэтому разность нормируется на суммарный «свет»:
+  //   S = 1 − Σ|L − L'| / Σ(L + L'), где L' — зеркальное отражение. Один объект по центру → 1, объект сбоку → 0.
+  // Яркость слегка размывается (≈3% ширины), чтобы небольшие сдвиги снижали оценку плавно.
+  function s_mirrorSymmetry(gray, W, H){
+    const g = FFT.boxBlur(gray, W, H, 2);
+    let lo = Infinity;
+    for(let i=0;i<g.length;i++) if(g[i] < lo) lo = g[i];            // фон (самый тёмный уровень) в счёт не идёт
+    let diff = 0, tot = 0;
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+      const a = g[y*W + x] - lo, b = g[y*W + (W-1-x)] - lo;
+      diff += Math.abs(a - b); tot += a + b;
+    }
+    if(!(tot > 1e-6)) return { s: 0.5, asym: 0, empty: true };      // пустой кадр: симметрия не определена
+    const asym = diff / tot;
+    return { s: Utils.clamp(1 - asym, 0, 1), asym, empty: false };
+  }
   function buildSaliencySketch(frame, lens, cam, W=64, H=null, opts={}){
     if(!H) H = Math.max(2, Math.round(W * frame.aspect[1] / frame.aspect[0]));
     // Приводим W,H к степеням двойки (для radix-2 FFT)
@@ -3032,7 +3050,7 @@ const Evaluator = (() => {
     peaks.sort((a,b) => b.w - a.w);
     const heatDataForOverlay = peaks.slice(0, 12);
 
-    return { map: sal, W: W2, H: H2, centroid, heatDataForOverlay, parts:{ color: !!colorMap, sharp: !!sharp } };
+    return { map: sal, W: W2, H: H2, centroid, heatDataForOverlay, parts:{ color: !!colorMap, sharp: !!sharp }, gray, hasPixels: gotPixels };
   }
   // Карта внимания размыта (≈3 клетки на карте 64×32), поэтому часть массы объекта «вытекает» за его рамку.
   // Считаем долю внутри рамки, расширенной на ширину размытия; иначе одиночный объект получал фокус около 0.
@@ -3346,6 +3364,8 @@ const Evaluator = (() => {
     }));
     const focus = s_focus(saliency, mainBBox);
     const clarity = s_clarity(saliency);
+    // Симметрия по настоящей картинке кадра; без рендера (нет GPU) критерий считается по положению объекта в Evaluator V2.
+    const mirror = saliency.hasPixels ? s_mirrorSymmetry(saliency.gray, saliency.W, saliency.H) : null;
 
     // 9.5 Края
     const edges = s_edges(frame, lens, cam);
@@ -3429,11 +3449,12 @@ const Evaluator = (() => {
       criteria,
       evalOverlay,
       maps: idDepthMaps,
+      mirror,
       timestamp: Date.now()
     };
   }
 
-  return { evaluate, screenItems, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint, rasterizeIDDepthMap, srgbToLab, colorContrastMap, lumaGain, blurCircleMm, sharpnessWeight, sharpnessMap, mixSaliency } };
+  return { evaluate, screenItems, _test: { s_thirds_fromPoint, s_balance, s_clarity, s_focus, weightedCompositionCentroid, compositionScorePoint, rasterizeIDDepthMap, srgbToLab, colorContrastMap, lumaGain, s_mirrorSymmetry, blurCircleMm, sharpnessWeight, sharpnessMap, mixSaliency } };
 })();
 
 /* ============================================================
@@ -3571,7 +3592,9 @@ const EvaluatorV2 = (() => {
     const negative=gauss(Math.log(Math.max(0.004,1-safeB.area)/0.82),0.7);
     const frameObjects=visibleObjects(frame);
     const simplicity=clamp(1-Math.max(0,frameObjects.length-3)*0.14);
-    const symmetry=gauss(Math.abs(cx-0.5),0.18);
+    // ТЗ 9.3: зеркальное сравнение яркости кадра; запасной вариант — отклонение центра главного объекта от оси.
+    const mirror=base.mirror&&!base.mirror.empty?base.mirror:null;
+    const symmetry=mirror?mirror.s:gauss(Math.abs(cx-0.5),0.18);
     const tilt=gauss(Math.abs(frame.camera?.roll||0),5);
     const color=colorHarmony(frame);
 
@@ -3584,7 +3607,7 @@ const EvaluatorV2 = (() => {
       {id:'simplicity',name:'Простота',s:simplicity,why:'В кадре '+frameObjects.length+' видимых объектов.',act:simplicity<0.7?'Убрать второстепенные объекты или упростить кадр.':null},
       {id:'negative',name:'Негативное пространство',s:negative,why:'Свободная площадь вокруг главного объекта: '+((1-safeB.area)*100).toFixed(0)+'%.',act:negative<0.55?'Увеличить чистое пространство вокруг объекта.':null},
       {id:'shotScale',name:'Масштаб плана',s:shotScale,why:'Площадь главного объекта ≈ '+(safeB.area*100).toFixed(1)+'% кадра.',act:shotScale<0.55?'Изменить дистанцию или фокусное расстояние.':null},
-      {id:'symmetry',name:'Симметрия',s:symmetry,why:'Отклонение центра объекта от оси: '+Math.abs(cx-0.5).toFixed(2)+'.',act:symmetry<0.55?'Для симметричного варианта выровнять объект по центру.':null},
+      {id:'symmetry',name:'Симметрия',s:symmetry,why:mirror?('Зеркальная разница левой и правой половины кадра: '+(mirror.asym*100).toFixed(0)+'%.'):('Отклонение центра объекта от оси: '+Math.abs(cx-0.5).toFixed(2)+'.'),act:symmetry<0.55?'Для симметричного варианта выровнять объект по центру.':null},
       {id:'tilt',name:'Наклон / Dutch angle',s:tilt,why:'Roll камеры: '+(frame.camera?.roll||0).toFixed(1)+'°.',act:tilt<0.55?'Выровнять камеру, если наклон не является приёмом.':null}
     ];
 
@@ -7068,6 +7091,12 @@ function runTests(){
         near(T.blurCircleMm(85,1.8,3000,2936), 0.03, 0.0005) && near(T.blurCircleMm(85,1.8,3000,3067), 0.03, 0.0005) && T.blurCircleMm(85,1.8,3000,3000) === 0);
       ok('Резкость: внутри кружка = 1, при 2c = 0.5', T.sharpnessWeight(0.03,0.03) === 1 && near(T.sharpnessWeight(0.06,0.03), 0.5, 1e-9));
       ok('Резкость: без глубины все точки резкие', T.sharpnessMap(null, { fMm:50, N:2.8, sM:5, cMm:0.03 }, 4, 4).every(v => v === 1));
+      // Симметрия (ТЗ 9.3/14): зеркальное сравнение яркости.
+      const symImg = fn => mkImg(fn), symBox = (u,v,hw,hh) => (x,y) => (Math.abs(x-u) < hw && Math.abs(y-v) < hh) ? 0.9 : 0.05;
+      ok('Симметрия: объект на оси > 0.95', T.s_mirrorSymmetry(symImg(symBox(0.5,0.5,0.08,0.2)), W, H).s > 0.95);
+      ok('Симметрия: зеркальная пара > 0.95', T.s_mirrorSymmetry(symImg((x,y) => Math.max(symBox(0.25,0.5,0.07,0.2)(x,y), symBox(0.75,0.5,0.07,0.2)(x,y))), W, H).s > 0.95);
+      ok('Симметрия: сдвиг объекта снижает оценку', T.s_mirrorSymmetry(symImg(symBox(0.6,0.5,0.08,0.2)), W, H).s < 0.6);
+      ok('Симметрия: пустой кадр — нейтральные 0.5', T.s_mirrorSymmetry(new Float32Array(W*H), W, H).s === 0.5);
       ok('Внимание: плоская яркость — вклад spectral residual гасится', T.lumaGain(new Float32Array([0.5,0.5])) === 0 && T.lumaGain(new Float32Array([0,1])) === 1);
     }
     const uniformMap = { map: new Float32Array(16).fill(0.1), W:4, H:4 };
