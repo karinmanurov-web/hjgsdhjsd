@@ -142,6 +142,7 @@
     padding:0 4px;border-radius:3px;font-weight:600}
   .choiceBtn{display:block;width:100%;text-align:left;margin:6px 0;padding:8px 12px}
   .filmItem.dragTarget{border-color:var(--warn)}
+  .filmItem .mv{position:absolute;top:2px;left:4px;z-index:2;background:rgba(0,0,0,.7);padding:0 4px;border-radius:3px;font-size:11px;font-weight:600;color:#4fd1ff}
   .filmItem .shot{position:absolute;top:2px;right:4px;z-index:2;background:rgba(0,0,0,.7);padding:0 4px;border-radius:3px;font-size:10px;font-weight:600;color:#ffd75e}
   .filmItem .dur{position:absolute;right:4px;bottom:2px;z-index:2;background:rgba(0,0,0,.7);padding:0 4px;border-radius:3px;font-size:10px}
   .toast{position:absolute;top:calc(var(--h-ruler) + 44px);left:50%;transform:translateX(-50%);
@@ -592,6 +593,12 @@
         <div class="kv">Гиперфокал: <b id="infoH">—</b></div>
         <div class="kv">ГРИП: <b id="infoDof">—</b></div>
         <div class="kv">План: <b id="infoShot">—</b></div>
+        <div class="kv" style="margin-top:8px"><b>Движение камеры</b> <span class="hint">начало → конец в этом кадре</span></div>
+        <div class="row"><button id="mvStart" title="Запомнить текущую позу камеры (положение, углы, фокусное) как начало">⚑ Начало</button><button id="mvEnd" title="Запомнить текущую позу камеры как конец">⚑ Конец</button><button id="mvClear" title="Удалить движение из кадра">Сброс</button></div>
+        <div class="row"><button id="mvGoStart" title="Поставить камеру в начальную позу">К началу</button><button id="mvGoEnd" title="Поставить камеру в конечную позу">К концу</button></div>
+        <div class="kv">Движение: <b id="mvInfo">не задано</b></div>
+        <div class="row"><label>Просмотр</label><input type="range" id="mvT" min="0" max="100" value="0" style="flex:1" disabled><button id="mvPlay" title="Проиграть движение (камера кадра не меняется)" disabled>▶</button><button id="mvStop" title="Выйти из просмотра" disabled>✕</button></div>
+        <div class="row"><label><input type="checkbox" id="mvShowArrow"> Стрелка на кадре</label><label><input type="checkbox" id="mvShowPath"> Путь в 3D</label></div>
         <div class="row"><label title="Резко снятый предмет притягивает взгляд (ТЗ 9.4). Расстояние фокуса и диафрагма берутся из этого кадра."><input type="checkbox" id="camDofAttn"> Резкость влияет на карту внимания</label></div>
       </div>
     </div>
@@ -759,6 +766,7 @@ const State = (() => {
     grids: defaultGrids(),
     evalProfile: 'classic',
     improveStrength: 'medium',                   // «Улучшить»: soft | medium | strong
+    moveArrow: true, movePath: true,             // показ движения камеры: стрелка на кадре и путь в 3D
     improveObjects: true,                        // «Улучшить» может двигать/масштабировать объекты (кроме якорей и замков)
     actionLine: { a:null, b:null, show:true },   // линия действия (правило 180°): два объекта; null = выбрать автоматически
     groups: [],                                  // [{id,name,collapsed}]; у объекта — groupId
@@ -892,6 +900,8 @@ const State = (() => {
     if(!project.evalProfile) project.evalProfile = 'classic';
     if(!['soft','medium','strong'].includes(project.improveStrength)) project.improveStrength = 'medium';
     if(typeof project.improveObjects !== 'boolean') project.improveObjects = true;
+    if(typeof project.moveArrow !== 'boolean') project.moveArrow = true;
+    if(typeof project.movePath !== 'boolean') project.movePath = true;
     if(!project.actionLine || typeof project.actionLine !== 'object') project.actionLine = { a:null, b:null, show:true };
     if(typeof project.actionLine.show !== 'boolean') project.actionLine.show = true;
     if(!Array.isArray(project.groups)) project.groups = [];
@@ -1705,6 +1715,31 @@ const SceneManager = (() => {
     actionLineObj.computeLineDistances();
     scene.add(actionLineObj);
   }
+  // Путь камеры (движение «начало — конец») в 3D-редакторе: линия, зелёная точка старта и конус-стрелка на конце.
+  // Лежит в scene, а не в rootGroup, поэтому в кадры не попадает.
+  let movePathObj = null;
+  function setMovePath(pts){
+    if(movePathObj){
+      scene.remove(movePathObj);
+      movePathObj.traverse(o => { if(o.geometry) o.geometry.dispose(); if(o.material) o.material.dispose(); });
+      movePathObj = null;
+    }
+    if(!pts || pts.length < 2 || !scene) return;
+    const vs = pts.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+    const g = new THREE.Group();
+    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(vs), new THREE.LineBasicMaterial({ color:0x39d0ff })));
+    const start = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshBasicMaterial({ color:0x4caf50 }));
+    start.position.copy(vs[0]); g.add(start);
+    const dir = vs[vs.length-1].clone().sub(vs[vs.length-2]);
+    if(dir.lengthSq() > 1e-12){
+      dir.normalize();
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.32, 14), new THREE.MeshBasicMaterial({ color:0x39d0ff }));
+      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+      cone.position.copy(vs[vs.length-1]).addScaledVector(dir, -0.1);
+      g.add(cone);
+    }
+    scene.add(g); movePathObj = g;
+  }
   // Выполнить fn, пока объекты показаны в состоянии кадра frame (с его overrides), и вернуть сцену как была.
   // Нужен для рендера и карты внимания кандидатов «Улучшить»: у них правки объектов лежат только в overrides.
   function withFrameState(frame, fn){
@@ -1960,7 +1995,7 @@ const SceneManager = (() => {
     updateParamsFromData, rebuild, rebuildOne, applyFrameState, fitView, resetView, setEditorViewPreset,
     updateShotCamViz, readCamGroupToShot,
     setSceneRotation, getSceneRotation, applySceneRotationFromState,
-    setEditorMode, getEditorMode, setHost, withFrameState, setActionLine,
+    setEditorMode, getEditorMode, setHost, withFrameState, setActionLine, setMovePath,
     getRenderInfo(){
       return { objectMap, rootGroup, editorCamera, orbit, renderer, scene };
     }
@@ -2242,6 +2277,47 @@ const GridOverlay = (() => {
     ctx.lineWidth = g.width;
     ctx.setLineDash([]);
   }
+  // Стрелка движения камеры на кадре (ТЗ «Для кино»): рисуем главное движение, в подписи — два главных.
+  // Стрелка показывает движение камеры: панорама вправо → стрелка вправо; наезд → стрелки к центру; облёт → дуга.
+  function drawMoveArrow(mv, fx, fy, fw, fh){
+    const top = mv && mv.parts && mv.parts[0];
+    if(!top) return;
+    const cx = fx + fw/2, cy = fy + fh/2, u = Math.min(fw, fh);
+    const col = '#4fd1ff', lw = Math.max(2, u/120);
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.setLineDash([]);
+    const stroke = fn => { ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.lineWidth = lw + 3; fn(); ctx.strokeStyle = col; ctx.lineWidth = lw; fn(); };
+    const head = (x1, y1, a) => { const h = u*0.045; ctx.moveTo(x1 - h*Math.cos(a-0.45), y1 - h*Math.sin(a-0.45)); ctx.lineTo(x1, y1); ctx.lineTo(x1 - h*Math.cos(a+0.45), y1 - h*Math.sin(a+0.45)); };
+    const arrow = (x0, y0, x1, y1) => stroke(() => { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); head(x1, y1, Math.atan2(y1-y0, x1-x0)); ctx.stroke(); });
+    const t = top.type, d = top.dir;
+    if(t === 'pan' || t === 'track'){
+      const sx = d === 'right' ? 1 : -1, y = fy + fh*0.82;
+      arrow(cx - sx*fw*0.22, y, cx + sx*fw*0.22, y);
+      if(t === 'track') stroke(() => { ctx.setLineDash([u*0.03, u*0.02]); ctx.beginPath(); ctx.moveTo(cx - fw*0.25, y + u*0.045); ctx.lineTo(cx + fw*0.25, y + u*0.045); ctx.stroke(); ctx.setLineDash([]); });
+    } else if(t === 'tilt' || t === 'crane'){
+      const sy = d === 'up' ? -1 : 1, x = fx + fw*0.88;
+      arrow(x, cy - sy*fh*0.22, x, cy + sy*fh*0.22);
+      if(t === 'crane') stroke(() => { ctx.setLineDash([u*0.03, u*0.02]); ctx.beginPath(); ctx.moveTo(x - u*0.045, cy - fh*0.25); ctx.lineTo(x - u*0.045, cy + fh*0.25); ctx.stroke(); ctx.setLineDash([]); });
+    } else if(t === 'dolly' || t === 'zoom'){
+      const inward = d === 'in', corners = [[-1,-1],[1,-1],[-1,1],[1,1]];
+      if(t === 'zoom') stroke(() => { ctx.setLineDash([u*0.03, u*0.02]); ctx.strokeRect(cx - fw*0.2, cy - fh*0.2, fw*0.4, fh*0.4); ctx.setLineDash([]); });
+      for(const [sx, sy] of corners){
+        const o = [cx + sx*fw*0.38, cy + sy*fh*0.38], i = [cx + sx*fw*0.22, cy + sy*fh*0.22];
+        if(inward) arrow(o[0], o[1], i[0], i[1]); else arrow(i[0], i[1], o[0], o[1]);
+      }
+    } else if(t === 'orbit'){
+      const r = u*0.26, ccy = cy - r*0.25, right = d === 'right';
+      const a0 = right ? 0.8*Math.PI : 0.2*Math.PI, a1 = right ? 0.2*Math.PI : 0.8*Math.PI;
+      stroke(() => { ctx.beginPath(); ctx.arc(cx, ccy, r, a0, a1, right); const ex = cx + r*Math.cos(a1), ey = ccy + r*Math.sin(a1); const tang = a1 + (right ? -Math.PI/2 : Math.PI/2); head(ex, ey, tang); ctx.stroke(); });
+    }
+    const label = mv.label || '';
+    if(label){
+      ctx.font = '600 ' + Math.max(11, Math.round(u/36)) + 'px sans-serif'; ctx.textBaseline = 'top';
+      const pad = 5, tw = ctx.measureText(label).width, th = Math.max(11, Math.round(u/36));
+      ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(fx + 8, fy + 8, tw + pad*2, th + pad*2);
+      ctx.fillStyle = col; ctx.fillText(label, fx + 8 + pad, fy + 8 + pad);
+    }
+    ctx.restore();
+  }
   function draw(W, H, rect, grids, ctxInfo, objectsInfo, guides, opts){
     if(!ctx) return;
     ctx.clearRect(0, 0, W, H);
@@ -2442,6 +2518,7 @@ const GridOverlay = (() => {
       }
       ctx.restore();
     }
+    if(opts?.moveArrow) drawMoveArrow(opts.moveArrow, fx, fy, fw, fh);
     // Оверлеи оценки
     if(opts?.ovEval && opts?.evalOverlay){
       drawEvalOverlay(opts.evalOverlay, fx, fy, fw, fh);
@@ -4216,7 +4293,103 @@ const Continuity = (() => {
     const ux = (b[0]-a[0])/len, uz = (b[2]-a[2])/len;
     return { ax:a[0]-ux*ext, az:a[2]-uz*ext, bx:b[0]+ux*ext, bz:b[2]+uz*ext };
   }
-  return { SHOT_TYPES, classifyShot, shotRatio, shotInfo, mainObjectOf, LINE_EPS_M, resolveActionLine, cameraSide, checkSequence, lineSegment };
+  /* ---- Движение камеры: ключевые позы «начало — конец» в одном кадре ----
+     Поза = { pos, yaw, pitch, roll, target, mode, focalMm }. По двум позам определяем тип движения (панорама, наклон,
+     наезд/отъезд, проезд, кран, зум, облёт), по ним рисуем стрелку на кадре и путь камеры в 3D и считаем промежуточные позы
+     для превью. Конвенция направлений — как в three.js (камера смотрит вдоль −Z, yaw > 0 поворачивает влево). */
+  const MOVE_MIN = { angle:3, dist:0.3, crane:0.5, zoom:0.05, orbitDeg:15, orbitRadius:0.2 };
+  const D2R = Math.PI/180;
+  const wrap180 = d => (((d % 360) + 540) % 360) - 180;
+  const v3sub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  const v3len = a => Math.hypot(a[0], a[1], a[2]);
+  function poseOfFrame(frame){
+    const c = frame.camera || {};
+    return {
+      pos:(c.pos || [0,0,0]).slice(), yaw:c.yaw || 0, pitch:c.pitch || 0, roll:c.roll || 0,
+      target:(c.target || [0,0,-1]).slice(), mode:c.mode, focalMm:frame.lens?.focalMm ?? 50
+    };
+  }
+  // Единичный вектор взгляда позы.
+  function forwardOf(pose){
+    if(pose.mode === 'lookAt' && pose.target){
+      const d = v3sub(pose.target, pose.pos), n = v3len(d);
+      if(n > 1e-9) return [d[0]/n, d[1]/n, d[2]/n];
+    }
+    const y = (pose.yaw || 0) * D2R, p = (pose.pitch || 0) * D2R;
+    return [-Math.sin(y)*Math.cos(p), Math.sin(p), -Math.cos(y)*Math.cos(p)];
+  }
+  const yawOf = f => Math.atan2(-f[0], -f[2]) / D2R;
+  const pitchOf = f => Math.asin(Math.max(-1, Math.min(1, f[1]))) / D2R;
+  const MOVE_LABELS = {
+    pan:{ left:'Панорама влево', right:'Панорама вправо' }, tilt:{ up:'Наклон вверх', down:'Наклон вниз' },
+    dolly:{ in:'Наезд', out:'Отъезд' }, track:{ left:'Проезд влево', right:'Проезд вправо' },
+    crane:{ up:'Кран вверх', down:'Кран вниз' }, zoom:{ in:'Зум ближе', out:'Зум дальше' },
+    orbit:{ left:'Облёт влево', right:'Облёт вправо' }
+  };
+  // Определение движения. subject — позиция объекта, вокруг которого возможен облёт (или null).
+  // Возвращает { type, dir, label, parts:[{type,dir,mag,score,label}] }; parts отсортированы по убыванию score (≈ «насколько заметно»).
+  function classifyMove(start, end, subject){
+    const f0 = forwardOf(start), f1 = forwardOf(end);
+    const dyaw = wrap180(yawOf(f1) - yawOf(f0)), dpitch = pitchOf(f1) - pitchOf(f0);
+    const d = v3sub(end.pos, start.pos);
+    const gl = Math.hypot(f0[0], f0[2]) || 1;
+    const fg = [f0[0]/gl, 0, f0[2]/gl], rg = [-fg[2], 0, fg[0]];            // вперёд и вправо по полу
+    const df = d[0]*fg[0] + d[2]*fg[2], dr = d[0]*rg[0] + d[2]*rg[2], dv = d[1];
+    const lnF = (start.focalMm > 0 && end.focalMm > 0) ? Math.log(end.focalMm / start.focalMm) : 0;
+    const parts = [];
+    const add = (type, dir, mag, score) => parts.push({ type, dir, mag, score, label:MOVE_LABELS[type][dir] });
+    let orbit = false;
+    if(subject){
+      const s0 = [start.pos[0]-subject[0], start.pos[2]-subject[2]], s1 = [end.pos[0]-subject[0], end.pos[2]-subject[2]];
+      const r0 = Math.hypot(...s0), r1 = Math.hypot(...s1);
+      if(r0 > 0.3 && r1 > 0.3){
+        const phi = Math.atan2(s0[1]*s1[0] - s0[0]*s1[1], s0[0]*s1[0] + s0[1]*s1[1]) / D2R;
+        if(Math.abs(phi) >= MOVE_MIN.orbitDeg && Math.abs(r1/r0 - 1) < MOVE_MIN.orbitRadius){
+          orbit = true;
+          add('orbit', dr >= 0 ? 'right' : 'left', Math.abs(phi), Math.abs(phi)/30);
+        }
+      }
+    }
+    if(!orbit){
+      if(Math.abs(dyaw) >= MOVE_MIN.angle && Math.abs(dyaw) >= Math.abs(dpitch)) add('pan', dyaw > 0 ? 'left' : 'right', Math.abs(dyaw), Math.abs(dyaw)/15);
+      if(Math.abs(dpitch) >= MOVE_MIN.angle && Math.abs(dpitch) > Math.abs(dyaw)) add('tilt', dpitch > 0 ? 'up' : 'down', Math.abs(dpitch), Math.abs(dpitch)/10);
+      if(Math.abs(df) >= MOVE_MIN.dist && Math.abs(df) >= Math.abs(dr)) add('dolly', df > 0 ? 'in' : 'out', Math.abs(df), Math.abs(df)/1.5);
+      if(Math.abs(dr) >= MOVE_MIN.dist && Math.abs(dr) > Math.abs(df)) add('track', dr > 0 ? 'right' : 'left', Math.abs(dr), Math.abs(dr)/1.5);
+    }
+    if(Math.abs(dv) >= MOVE_MIN.crane) add('crane', dv > 0 ? 'up' : 'down', Math.abs(dv), Math.abs(dv)/1.0);
+    if(Math.abs(lnF) >= MOVE_MIN.zoom) add('zoom', lnF > 0 ? 'in' : 'out', Math.abs(lnF), Math.abs(lnF)/0.3);
+    parts.sort((a,b) => b.score - a.score);
+    const top = parts[0];
+    return { type: top ? top.type : 'none', dir: top ? top.dir : null,
+             label: top ? parts.slice(0,2).map(p => p.label).join(' + ') : 'Без движения', parts };
+  }
+  // Промежуточная поза, t ∈ 0..1. При облёте (subject задан и движение — облёт) камера идёт по дуге вокруг subject.
+  function samplePose(start, end, t, subject){
+    const u = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
+    const lerp = (a,b) => a + (b-a)*u, lerp3 = (a,b) => [lerp(a[0],b[0]), lerp(a[1],b[1]), lerp(a[2],b[2])];
+    const out = {
+      pos: lerp3(start.pos, end.pos), target: lerp3(start.target || [0,0,-1], end.target || start.target || [0,0,-1]),
+      yaw: (start.yaw || 0) + wrap180((end.yaw || 0) - (start.yaw || 0))*u, pitch: lerp(start.pitch || 0, end.pitch || 0), roll: lerp(start.roll || 0, end.roll || 0),
+      mode: start.mode,
+      focalMm: start.focalMm === end.focalMm ? start.focalMm
+        : ((start.focalMm > 0 && end.focalMm > 0) ? Math.exp(lerp(Math.log(start.focalMm), Math.log(end.focalMm))) : lerp(start.focalMm, end.focalMm))
+    };
+    if(subject && classifyMove(start, end, subject).type === 'orbit'){
+      const s0 = [start.pos[0]-subject[0], start.pos[2]-subject[2]], s1 = [end.pos[0]-subject[0], end.pos[2]-subject[2]];
+      const a0 = Math.atan2(s0[0], s0[1]), phi = Math.atan2(s0[1]*s1[0] - s0[0]*s1[1], s0[0]*s1[0] + s0[1]*s1[1]);
+      const r = lerp(Math.hypot(...s0), Math.hypot(...s1)), a = a0 + phi*u;
+      out.pos = [subject[0] + r*Math.sin(a), lerp(start.pos[1], end.pos[1]), subject[2] + r*Math.cos(a)];
+    }
+    return out;
+  }
+  // Точки пути камеры (для линии в 3D).
+  function movePath(start, end, subject, n=24){
+    const pts = [];
+    for(let i=0;i<=n;i++) pts.push(samplePose(start, end, i/n, subject).pos);
+    return pts;
+  }
+  return { SHOT_TYPES, classifyShot, shotRatio, shotInfo, mainObjectOf, LINE_EPS_M, resolveActionLine, cameraSide, checkSequence, lineSegment,
+           MOVE_MIN, poseOfFrame, forwardOf, classifyMove, samplePose, movePath };
 })();
 
 /* ============================================================
@@ -4267,6 +4440,10 @@ const UI = (() => {
       camDofAttn: document.getElementById('camDofAttn'),
       infoShot: document.getElementById('infoShot'),
       seqLineA: document.getElementById('seqLineA'), seqLineB: document.getElementById('seqLineB'),
+      mvStart: document.getElementById('mvStart'), mvEnd: document.getElementById('mvEnd'), mvClear: document.getElementById('mvClear'),
+      mvGoStart: document.getElementById('mvGoStart'), mvGoEnd: document.getElementById('mvGoEnd'), mvInfo: document.getElementById('mvInfo'),
+      mvT: document.getElementById('mvT'), mvPlay: document.getElementById('mvPlay'), mvStop: document.getElementById('mvStop'),
+      mvShowArrow: document.getElementById('mvShowArrow'), mvShowPath: document.getElementById('mvShowPath'),
       btnSeqAuto: document.getElementById('btnSeqAuto'), seqShowLine: document.getElementById('seqShowLine'),
       seqInfo: document.getElementById('seqInfo'), seqList: document.getElementById('seqList'), seqVariety: document.getElementById('seqVariety'), seqBadge: document.getElementById('seqBadge'),
       btnImprove: document.getElementById('btnImprove'),
@@ -4648,6 +4825,28 @@ const UI = (() => {
     el.seqLineA.addEventListener('change', () => setLine(el.seqLineA.value, el.seqLineB.value));
     el.seqLineB.addEventListener('change', () => setLine(el.seqLineA.value, el.seqLineB.value));
     el.btnSeqAuto.addEventListener('click', () => setLine(null, null));
+    const setPose = which => {
+      const f = State.currentFrame();
+      State.History.tx(() => { f.move = f.move || {}; f.move[which] = Continuity.poseOfFrame(f); });
+      State.save(); stopMovePreview(); refreshSequencePanel();
+    };
+    el.mvStart.addEventListener('click', () => setPose('start'));
+    el.mvEnd.addEventListener('click', () => setPose('end'));
+    el.mvClear.addEventListener('click', () => { const f = State.currentFrame(); State.History.tx(() => { delete f.move; }); State.save(); stopMovePreview(); });
+    const goPose = which => {
+      const f = State.currentFrame(), pose = f.move && f.move[which];
+      if(!pose) return;
+      moveAnimId++; movePreview = null;
+      State.History.tx(() => { applyPoseToFrame(f, pose); });
+      State.save(); refreshCameraUI(); SceneManager.updateShotCamViz(FrameAdapter.frameToShot(f), FrameAdapter.lensOf(f)); drawFrameInto(); scheduleEval();
+    };
+    el.mvGoStart.addEventListener('click', () => goPose('start'));
+    el.mvGoEnd.addEventListener('click', () => goPose('end'));
+    el.mvT.addEventListener('input', () => { moveAnimId++; el.mvPlay.textContent = '▶'; showMovePreview(Number(el.mvT.value) / 100); refreshMovePanel(); });
+    el.mvPlay.addEventListener('click', playMove);
+    el.mvStop.addEventListener('click', stopMovePreview);
+    el.mvShowArrow.addEventListener('change', () => { State.History.tx(() => { State.get().moveArrow = el.mvShowArrow.checked; }); State.save(); drawFrameInto(); });
+    el.mvShowPath.addEventListener('change', () => { State.History.tx(() => { State.get().movePath = el.mvShowPath.checked; }); State.save(); refreshMovePanel(); });
     el.seqShowLine.addEventListener('change', () => { State.History.tx(() => { State.get().actionLine.show = el.seqShowLine.checked; }); State.save(); refreshSequencePanel(); });
     el.improveObjectsChk.addEventListener('change', () => {
       State.History.tx(() => { State.get().improveObjects = el.improveObjectsChk.checked; });
@@ -5255,6 +5454,11 @@ const UI = (() => {
         sh.title = 'План: ' + si.name + ' (главный объект ≈ ' + si.ratio.toFixed(2) + ' высоты кадра)';
         item.appendChild(sh);
       }
+      { const mi = moveInfoOf(f);
+        if(mi && mi.type !== 'none'){
+          const mv = document.createElement('span'); mv.className = 'mv'; mv.textContent = MOVE_GLYPH[mi.type] || '→';
+          mv.title = 'Движение камеры: ' + mi.label; item.appendChild(mv);
+        } }
       if(f.durationSec){
         const du = document.createElement('span'); du.className = 'dur'; du.textContent = f.durationSec + ' с';
         item.appendChild(du);
@@ -5307,6 +5511,83 @@ const UI = (() => {
       else if(ir.right > fr.right) film.scrollLeft += (ir.right - fr.right) + 8;
     }
     refreshSequencePanel();
+  }
+  /* ---- Движение камеры в кадре: ключевые позы «начало — конец», стрелка, путь, просмотр ---- */
+  let movePreview = null;            // { frameId, t } — просмотр позы между началом и концом (камера кадра не меняется)
+  let moveAnimId = 0;
+  const MOVE_GLYPH = { pan:'⇄', tilt:'⇅', dolly:'⇲', track:'⇢', crane:'⤒', zoom:'⌕', orbit:'⟳' };
+  function frameMoveOf(f){
+    const m = f && f.move;
+    const ok = p => p && Array.isArray(p.pos) && p.pos.length >= 3 && p.pos.every(Number.isFinite);
+    return (m && ok(m.start) && ok(m.end)) ? m : null;
+  }
+  function moveSubjectOf(f){
+    const main = Continuity.mainObjectOf(f);
+    if(!main) return null;
+    const tr = { ...(main.transform || {}), ...(f.overrides?.[main.id]?.transform || {}) };
+    return Array.isArray(tr.pos) ? tr.pos.slice() : null;
+  }
+  function moveInfoOf(f){
+    const m = frameMoveOf(f);
+    if(!m) return null;
+    try{ return Continuity.classifyMove(m.start, m.end, moveSubjectOf(f)); }catch(_){ return null; }
+  }
+  // Кадр для показа: при просмотре движения — копия с камерой в промежуточной позе (исходный кадр не трогаем).
+  function movePreviewFrame(frame){
+    const m = frameMoveOf(frame);
+    if(!movePreview || !m || !frame || movePreview.frameId !== frame.id) return frame;
+    const p = Continuity.samplePose(m.start, m.end, movePreview.t, moveSubjectOf(frame));
+    return { ...frame,
+      camera: { ...frame.camera, pos:p.pos, yaw:p.yaw, pitch:p.pitch, roll:p.roll, target:(p.target || frame.camera.target).slice() },
+      lens: { ...frame.lens, focalMm:p.focalMm } };
+  }
+  function applyPoseToFrame(f, pose){
+    f.camera.pos = pose.pos.slice(); f.camera.yaw = pose.yaw; f.camera.pitch = pose.pitch; f.camera.roll = pose.roll;
+    if(Array.isArray(pose.target)) f.camera.target = pose.target.slice();
+    if(pose.focalMm > 0) f.lens.focalMm = pose.focalMm;
+  }
+  function stopMovePreview(){
+    moveAnimId++; movePreview = null;
+    el.mvT.value = 0; el.mvPlay.textContent = '▶';
+    drawFrameInto(); refreshMovePanel();
+  }
+  function showMovePreview(t){
+    const f = State.currentFrame();
+    movePreview = { frameId:f.id, t:Math.max(0, Math.min(1, t)) };
+    el.mvT.value = Math.round(movePreview.t * 100);
+    const pf = movePreviewFrame(f);
+    SceneManager.updateShotCamViz(FrameAdapter.frameToShot(pf), FrameAdapter.lensOf(pf));
+    drawFrameInto();
+  }
+  function playMove(){
+    const f = State.currentFrame();
+    if(!frameMoveOf(f)) return;
+    if(moveAnimId && movePreview && el.mvPlay.textContent === '❚❚'){ moveAnimId++; el.mvPlay.textContent = '▶'; return; }   // пауза
+    const my = ++moveAnimId, dur = Math.max(1, Number(f.durationSec) || 2) * 1000;
+    let t0 = performance.now(), from = (movePreview && movePreview.t < 1) ? movePreview.t : 0;
+    t0 -= from * dur;
+    el.mvPlay.textContent = '❚❚';
+    const step = now => {
+      if(my !== moveAnimId || State.currentFrame().id !== f.id) return;
+      const t = Math.min(1, (now - t0) / dur);
+      showMovePreview(t);
+      if(t < 1) requestAnimationFrame(step); else el.mvPlay.textContent = '▶';
+    };
+    requestAnimationFrame(step);
+  }
+  function refreshMovePanel(){
+    try{
+      const f = State.currentFrame(), project = State.get();
+      if(!f) return;
+      const m = f.move || {}, has = !!frameMoveOf(f), info = has ? moveInfoOf(f) : null;
+      el.mvGoStart.disabled = !m.start; el.mvGoEnd.disabled = !m.end; el.mvClear.disabled = !(m.start || m.end);
+      el.mvT.disabled = !has; el.mvPlay.disabled = !has; el.mvStop.disabled = !(has && movePreview);
+      el.mvShowArrow.checked = project.moveArrow !== false; el.mvShowPath.checked = project.movePath !== false;
+      el.mvInfo.textContent = has ? (info ? info.label : '—') : (m.start ? 'задан только старт' : (m.end ? 'задан только конец' : 'не задано'));
+      let pts = null;
+      if(has && project.movePath !== false) pts = Continuity.movePath(m.start, m.end, moveSubjectOf(f), 24);
+      SceneManager.setMovePath(pts);
+    }catch(err){ console.warn('Move panel failed', err); }
   }
   // Панель «Последовательность»: линия действия (правило 180°), сторона камеры в каждом кадре, разнообразие планов.
   function refreshSequencePanel(){
@@ -5636,7 +5917,8 @@ const UI = (() => {
       const horizonV = AnalyzerLite.horizonV(shot, lens);
       GridOverlay.draw(W, H, rect, State.get().grids, { horizonV }, objectsInfo,
         State.get().guides,
-        { ovCentroid: el.ovCentroid.checked, ovBalance: el.ovBalance.checked, ovHeat: el.ovHeat.checked });
+        { ovCentroid: el.ovCentroid.checked, ovBalance: el.ovBalance.checked, ovHeat: el.ovHeat.checked,
+          moveArrow: (State.get().moveArrow !== false) ? moveInfoOf(frame) : null });
       ctx.drawImage(overlay, 0, 0);
     }
     downloadBlob(null, `${safeFileName(State.get().name)}-frame-${State.get().frames.indexOf(frame)+1}-${safeFileName(frame.name)}.png`, 'image/png', tmp.toDataURL('image/png'));
@@ -5881,7 +6163,7 @@ const UI = (() => {
       overlay.style.pointerEvents = 'none';
       container.appendChild(overlay);
     }
-    const frame = State.currentFrame();
+    const frame = movePreviewFrame(State.currentFrame());
     const info = FrameRenderer.renderFrame(frame);
     if(!info) return;
     const rect = container.getBoundingClientRect();
@@ -5936,7 +6218,8 @@ const UI = (() => {
         ovBalance: el.ovBalance.checked,
         ovHeat: el.ovHeat.checked,
         ovEval: el.ovEval.checked,
-        evalOverlay
+        evalOverlay,
+        moveArrow: (State.get().moveArrow !== false) ? moveInfoOf(State.currentFrame()) : null
       }
     );
   }
@@ -6350,6 +6633,7 @@ const UI = (() => {
     el.infoDof.textContent = dn.toFixed(2) + ' м / ' + (df === Infinity ? '∞' : df.toFixed(2) + ' м');
     el.hudFov.textContent = lens.fovV.toFixed(1);
     el.hudF.textContent = frame.lens.focalMm.toFixed(1);
+    refreshMovePanel();
   }
 
   function updateSceneRotSliders(){
@@ -7493,6 +7777,25 @@ function runTests(){
       proj.frames = [mkF('1',0,4), mkF('2',6,0.05), mkF('3',0,-4)];
       ok('180°: переход через нейтральный план на линии разрешён', C.checkSequence(proj, proj.frames[0]).violations.length === 0);
       ok('180°: один объект — линии нет', C.resolveActionLine({ objects:[oa], actionLine:{} }, mkF('f',0,4)) === null);
+    }
+    // Движение камеры: тип по двум позам, промежуточные позы, облёт по дуге.
+    {
+      const P = (o = {}) => ({ pos:[0,1.6,5], yaw:0, pitch:0, roll:0, target:[0,0,-1], mode:'free', focalMm:50, ...o });
+      const mv = (e, subj) => C.classifyMove(P(), P(e), subj || null);
+      ok('Движение: yaw +20 — панорама влево, −20 — вправо', mv({yaw:20}).label === 'Панорама влево' && mv({yaw:-20}).label === 'Панорама вправо');
+      ok('Движение: pitch ±15 — наклон вверх/вниз', mv({pitch:15}).type === 'tilt' && mv({pitch:15}).dir === 'up' && mv({pitch:-15}).dir === 'down');
+      ok('Движение: вдоль взгляда — наезд/отъезд, вбок — проезд', mv({pos:[0,1.6,3]}).label === 'Наезд' && mv({pos:[0,1.6,8]}).label === 'Отъезд' && mv({pos:[2,1.6,5]}).label === 'Проезд вправо');
+      ok('Движение: по вертикали — кран, по фокусному — зум', mv({pos:[0,3.2,5]}).type === 'crane' && mv({focalMm:85}).dir === 'in' && mv({focalMm:24}).dir === 'out');
+      ok('Движение: мелкие изменения и отсутствие изменений — «Без движения»', mv({yaw:2}).type === 'none' && mv({}).label === 'Без движения');
+      ok('Движение: yaw 0 → 350 — панорама на 10° вправо, а не на 350°', mv({yaw:350}).dir === 'right' && Math.abs(mv({yaw:350}).parts[0].mag - 10) < 1e-6);
+      const a60 = 60*Math.PI/180, endO = P({ pos:[5*Math.sin(a60), 1.6, 5*Math.cos(a60)], yaw:-60 });
+      ok('Движение: дуга вокруг объекта — облёт', C.classifyMove(P(), endO, [0,0,0]).type === 'orbit');
+      const mid = C.samplePose(P(), endO, 0.5, [0,0,0]);
+      ok('Движение: середина облёта на окружности (r = 5), не на хорде', Math.abs(Math.hypot(mid.pos[0], mid.pos[2]) - 5) < 1e-6);
+      const s0 = C.samplePose(P(), P({pos:[4,3,1], yaw:40, focalMm:100}), 0), s1 = C.samplePose(P(), P({pos:[4,3,1], yaw:40, focalMm:100}), 1);
+      ok('Движение: t=0 — начало, t=1 — конец', Math.abs(s0.pos[0]) < 1e-9 && Math.abs(s1.pos[0] - 4) < 1e-9 && Math.abs(s1.yaw - 40) < 1e-9 && Math.abs(s1.focalMm - 100) < 1e-9);
+      ok('Движение: фокусное идёт геометрически (50 → 100 даёт 70.7 в середине)', Math.abs(C.samplePose(P(), P({focalMm:100}), 0.5).focalMm - Math.sqrt(5000)) < 1e-9);
+      ok('Движение: путь камеры — 25 точек от старта до конца', (() => { const pth = C.movePath(P(), P({pos:[0,1.6,1]}), null, 24); return pth.length === 25 && pth[0][2] === 5 && Math.abs(pth[24][2] - 1) < 1e-9; })());
     }
   }
   /* ---- Этап 6: поиск улучшений, сила коррекции, охрана замысла ---- */
